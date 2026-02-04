@@ -37,6 +37,18 @@ interface Macro {
   change_pct: number
 }
 
+interface Prospect {
+  id: number
+  ticker: string
+  name: string
+  thesis: string
+  entry_trigger: string
+  confidence: number
+  priority: number
+  latest_price: number
+  added_at: string
+}
+
 const MACRO_NAMES: Record<string, string> = {
   'GC=F': '🥇 Guld',
   'BZ=F': '🛢️ Brent',
@@ -51,6 +63,7 @@ export default function Dashboard() {
   const [trades, setTrades] = useState<Trade[]>([])
   const [stocks, setStocks] = useState<Stock[]>([])
   const [macro, setMacro] = useState<Macro[]>([])
+  const [prospects, setProspects] = useState<Prospect[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   
@@ -59,11 +72,12 @@ export default function Dashboard() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [portfolioRes, tradesRes, stocksRes, macroRes] = await Promise.all([
+      const [portfolioRes, tradesRes, stocksRes, macroRes, prospectsRes] = await Promise.all([
         fetch('/api/portfolio'),
         fetch('/api/trades'),
         fetch('/api/stocks'),
         fetch('/api/macro'),
+        fetch('/api/prospects'),
       ])
       
       if (portfolioRes.ok) {
@@ -74,6 +88,7 @@ export default function Dashboard() {
       if (tradesRes.ok) setTrades(await tradesRes.json())
       if (stocksRes.ok) setStocks(await stocksRes.json())
       if (macroRes.ok) setMacro(await macroRes.json())
+      if (prospectsRes.ok) setProspects(await prospectsRes.json())
       
       setLastUpdate(new Date())
     } catch (error) {
@@ -168,6 +183,22 @@ export default function Dashboard() {
                   trade={trade} 
                   currentPrice={getCurrentPrice(trade.ticker)}
                 />
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Prospects / Watchlist */}
+        <section className="mb-12">
+          <h2 className="text-2xl font-semibold mb-6">🎯 Prospects</h2>
+          {prospects.length === 0 ? (
+            <div className="bg-gray-900 rounded-2xl p-8 text-center">
+              <p className="text-gray-500">Ingen watchlist.</p>
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {prospects.map((prospect) => (
+                <ProspectCard key={prospect.id} prospect={prospect} />
               ))}
             </div>
           )}
@@ -326,6 +357,48 @@ function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number
             Confidence: {confidence.toFixed(0)}%
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function ProspectCard({ prospect }: { prospect: Prospect }) {
+  const confidence = prospect.confidence ? parseFloat(String(prospect.confidence)) : 0
+  const price = prospect.latest_price ? parseFloat(String(prospect.latest_price)) : null
+  
+  const priorityColors: Record<number, string> = {
+    1: 'bg-green-900 text-green-300',
+    2: 'bg-blue-900 text-blue-300',
+    3: 'bg-yellow-900 text-yellow-300',
+    4: 'bg-gray-800 text-gray-300',
+    5: 'bg-gray-800 text-gray-400',
+  }
+  
+  return (
+    <div className="bg-gray-900 rounded-2xl p-5">
+      <div className="flex justify-between items-start mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${priorityColors[prospect.priority] || priorityColors[5]}`}>
+            #{prospect.priority}
+          </span>
+          <span className="text-lg font-bold">{prospect.ticker}</span>
+          <span className="text-gray-500 text-sm">{prospect.name}</span>
+        </div>
+        <div className="text-right">
+          <div className="text-sm text-gray-500">Pris</div>
+          <div className="font-medium">{price?.toFixed(2) || '-'}</div>
+        </div>
+      </div>
+      
+      <p className="text-sm text-gray-300 mb-3">{prospect.thesis}</p>
+      
+      <div className="flex items-center justify-between text-xs">
+        <div className="text-gray-500">
+          <strong>Entry:</strong> {prospect.entry_trigger}
+        </div>
+        <div className="px-2 py-0.5 bg-gray-800 rounded text-gray-400">
+          {confidence.toFixed(0)}% confidence
+        </div>
       </div>
     </div>
   )
