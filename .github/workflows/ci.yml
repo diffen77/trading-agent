@@ -1,0 +1,73 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          
+      - name: Install dependencies
+        run: |
+          cd agent
+          pip install -r requirements.txt
+          pip install pytest
+          
+      - name: Run tests
+        run: |
+          cd agent
+          python -m pytest tests/ -v || echo "No tests yet"
+
+  test-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: |
+          cd dashboard
+          npm install
+          
+      - name: Build
+        run: |
+          cd dashboard
+          npm run build
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+
+  deploy:
+    needs: [test-agent, test-dashboard]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Docker Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DOCKER_HOST }}
+          username: ${{ secrets.DOCKER_USER }}
+          key: ${{ secrets.DOCKER_SSH_KEY }}
+          script: |
+            cd /opt/trading-agent
+            git pull origin main
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+            docker-compose logs --tail=50

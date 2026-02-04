@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: trading-agent-db
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-trading_dev_123}
+      POSTGRES_DB: trading_agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: trading-agent-core
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://trading:${DB_PASSWORD:-trading_dev_123}@db:5432/trading_agent
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./agent:/app
+      - agent_data:/app/data
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: trading-agent-dashboard
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://trading:${DB_PASSWORD:-trading_dev_123}@db:5432/trading_agent
+      NEXT_PUBLIC_API_URL: http://localhost:3000
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  postgres_data:
+  agent_data:

@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+.npm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Local dev
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Database
+*.sql.bak
+
+# Secrets
+*.pem
+*.key
