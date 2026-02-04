@@ -158,8 +158,9 @@ class Database:
             }
     
     def log_trade(self, trade: dict):
-        """Log a trade with reasoning."""
+        """Log a trade with reasoning and update portfolio/balance."""
         with self.Session() as session:
+            # Log the trade
             session.execute(text("""
                 INSERT INTO trades (ticker, action, shares, price, total_value,
                     reasoning, confidence, hypothesis, macro_context)
@@ -174,8 +175,40 @@ class Database:
                 'reasoning': trade['reasoning'],
                 'confidence': trade.get('confidence'),
                 'hypothesis': trade.get('hypothesis'),
-                'macro_context': str(trade.get('macro_context', {})),
+                'macro_context': trade.get('macro_context', '{}'),
             })
+            
+            # Update balance
+            if trade['action'] == 'BUY':
+                session.execute(text("""
+                    UPDATE balance SET cash = cash - :amount, updated_at = NOW()
+                """), {'amount': trade['total_value']})
+                
+                # Add to portfolio (or update existing position)
+                session.execute(text("""
+                    INSERT INTO portfolio (ticker, shares, avg_price, current_price)
+                    VALUES (:ticker, :shares, :price, :price)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        shares = portfolio.shares + EXCLUDED.shares,
+                        avg_price = (portfolio.avg_price * portfolio.shares + :price * :shares) 
+                                    / (portfolio.shares + :shares),
+                        updated_at = NOW()
+                """), {
+                    'ticker': trade['ticker'],
+                    'shares': trade['shares'],
+                    'price': trade['price'],
+                })
+            elif trade['action'] == 'SELL':
+                session.execute(text("""
+                    UPDATE balance SET cash = cash + :amount, updated_at = NOW()
+                """), {'amount': trade['total_value']})
+                
+                # Remove from portfolio
+                session.execute(text("""
+                    UPDATE portfolio SET shares = shares - :shares, updated_at = NOW()
+                    WHERE ticker = :ticker
+                """), {'ticker': trade['ticker'], 'shares': trade['shares']})
+            
             session.commit()
     
     def get_trades(self, limit: int = 50) -> pd.DataFrame:
