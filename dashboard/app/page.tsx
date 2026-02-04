@@ -202,7 +202,7 @@ export default function Dashboard() {
               {stocks.slice(0, 20).map(stock => (
                 <tr key={stock.ticker} className="border-b border-gray-800/50">
                   <td className="py-3 font-medium">{stock.ticker}</td>
-                  <td className="py-3">{stock.price?.toFixed(2)} SEK</td>
+                  <td className="py-3">{parseFloat(String(stock.price)).toFixed(2)} SEK</td>
                   <td className="py-3 text-gray-500">{stock.sector || '-'}</td>
                 </tr>
               ))}
@@ -257,15 +257,16 @@ function StatCard({
 
 function MacroRow({ item }: { item: Macro }) {
   const name = MACRO_NAMES[item.symbol] || item.symbol
-  const isPositive = item.change_pct >= 0
+  const changePct = parseFloat(String(item.change_pct))
+  const isPositive = changePct >= 0
   
   return (
     <div className="flex justify-between items-center">
       <span className="text-gray-300">{name}</span>
       <div className="text-right">
-        <span className="font-medium">{item.value.toFixed(2)}</span>
+        <span className="font-medium">{parseFloat(String(item.value)).toFixed(2)}</span>
         <span className={`ml-2 text-sm ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
-          {isPositive ? '+' : ''}{item.change_pct.toFixed(1)}%
+          {isPositive ? '+' : ''}{changePct.toFixed(1)}%
         </span>
       </div>
     </div>
@@ -274,6 +275,10 @@ function MacroRow({ item }: { item: Macro }) {
 
 function TradeCard({ trade }: { trade: Trade }) {
   const isBuy = trade.action === 'BUY'
+  const shares = parseFloat(String(trade.shares))
+  const price = parseFloat(String(trade.price))
+  const totalValue = parseFloat(String(trade.total_value))
+  const confidence = trade.confidence ? parseFloat(String(trade.confidence)) : null
   
   return (
     <div className="bg-gray-900 rounded-2xl p-6">
@@ -288,11 +293,11 @@ function TradeCard({ trade }: { trade: Trade }) {
             <span className="text-xl font-bold">{trade.ticker}</span>
           </div>
           <div className="text-sm text-gray-500 mt-1">
-            {trade.shares.toFixed(2)} aktier @ {trade.price.toFixed(2)} SEK
+            {shares.toFixed(2)} aktier @ {price.toFixed(2)} SEK
           </div>
         </div>
         <div className="text-right">
-          <div className="font-semibold">{formatCurrency(trade.total_value)} SEK</div>
+          <div className="font-semibold">{formatCurrency(totalValue)} SEK</div>
           <div className="text-sm text-gray-500">
             {new Date(trade.executed_at).toLocaleDateString('sv-SE')}
           </div>
@@ -308,9 +313,9 @@ function TradeCard({ trade }: { trade: Trade }) {
             <strong>Hypotes:</strong> {trade.hypothesis}
           </div>
         )}
-        {trade.confidence && (
+        {confidence && (
           <div className="text-sm text-gray-500 mt-1">
-            Confidence: {trade.confidence}%
+            Confidence: {confidence.toFixed(0)}%
           </div>
         )}
       </div>
