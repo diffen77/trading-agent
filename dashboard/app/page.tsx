@@ -42,16 +42,12 @@ interface Macro {
 const MACRO_NAMES: Record<string, string> = {
   'GC=F': '🥇 Guld',
   'SI=F': '🥈 Silver', 
-  'CL=F': '🛢️ Olja WTI',
-  'BZ=F': '🛢️ Olja Brent',
+  'CL=F': '🛢️ WTI',
+  'BZ=F': '🛢️ Brent',
   'HG=F': '🔶 Koppar',
-  'NG=F': '🔥 Naturgas',
-  'EURSEK=X': '💶 EUR/SEK',
-  'USDSEK=X': '💵 USD/SEK',
-  'EURUSD=X': '💱 EUR/USD',
-  '^OMX': '📈 OMX30',
-  '^OMXSPI': '📊 OMXS All',
-  '^GSPC': '🇺🇸 S&P 500',
+  'EURSEK=X': '€/SEK',
+  'USDSEK=X': '$/SEK',
+  '^OMX': 'OMX30',
 }
 
 export default function Dashboard() {
@@ -63,7 +59,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 60000) // Uppdatera varje minut
+    const interval = setInterval(fetchData, 60000)
     return () => clearInterval(interval)
   }, [])
 
@@ -87,6 +83,12 @@ export default function Dashboard() {
     }
   }
 
+  // Get current price for a ticker
+  const getCurrentPrice = (ticker: string): number | null => {
+    const stock = stocks.find(s => s.ticker === ticker)
+    return stock ? parseFloat(String(stock.price)) : null
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black text-white">
@@ -95,140 +97,106 @@ export default function Dashboard() {
     )
   }
 
-  const commodities = macro.filter(m => m.type === 'commodity')
-  const currencies = macro.filter(m => m.type === 'currency')
-  const indices = macro.filter(m => m.type === 'index')
+  // Filter macro for header - only key ones
+  const headerMacro = macro.filter(m => 
+    ['GC=F', 'BZ=F', 'HG=F', 'EURSEK=X', 'USDSEK=X', '^OMX'].includes(m.symbol)
+  )
 
   return (
-    <main className="min-h-screen p-8 max-w-7xl mx-auto bg-black text-white">
-      <header className="mb-12">
-        <h1 className="text-5xl font-bold tracking-tight">Trading Agent</h1>
-        <p className="text-gray-500 mt-2">AI-driven papertrading på Stockholmsbörsen</p>
+    <main className="min-h-screen bg-black text-white">
+      {/* Macro Header Bar */}
+      <header className="border-b border-gray-800 px-4 py-2">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <h1 className="text-xl font-bold">Trading Agent</h1>
+          <div className="flex gap-4 text-xs">
+            {headerMacro.map(m => {
+              const changePct = parseFloat(String(m.change_pct))
+              const isPositive = changePct >= 0
+              return (
+                <div key={m.symbol} className="flex items-center gap-1">
+                  <span className="text-gray-500">{MACRO_NAMES[m.symbol] || m.symbol}</span>
+                  <span className="font-medium">{parseFloat(String(m.value)).toFixed(m.type === 'currency' ? 2 : 0)}</span>
+                  <span className={isPositive ? 'text-green-500' : 'text-red-500'}>
+                    {isPositive ? '↑' : '↓'}{Math.abs(changePct).toFixed(1)}%
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       </header>
 
-      {/* Portfolio Overview */}
-      <section className="mb-12">
-        <h2 className="text-2xl font-semibold mb-6">Portfölj</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          <StatCard
-            title="Totalt värde"
-            value={formatCurrency(portfolio?.total_value || 20000)}
-            subtitle="SEK"
-          />
-          <StatCard
-            title="Kontanter"
-            value={formatCurrency(portfolio?.cash || 20000)}
-            subtitle="SEK"
-          />
-          <StatCard
-            title="Positioner"
-            value={formatCurrency(portfolio?.positions_value || 0)}
-            subtitle="SEK"
-          />
-          <StatCard
-            title="Avkastning"
-            value={`${(portfolio?.pnl_pct || 0).toFixed(2)}%`}
-            subtitle={formatCurrency(portfolio?.pnl || 0) + ' SEK'}
-            highlight={portfolio?.pnl_pct ? portfolio.pnl_pct >= 0 : true}
-          />
-        </div>
-      </section>
+      <div className="max-w-7xl mx-auto p-8">
+        {/* Portfolio Overview */}
+        <section className="mb-12">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <StatCard
+              title="Totalt värde"
+              value={formatCurrency(portfolio?.total_value || 20000)}
+              subtitle="SEK"
+            />
+            <StatCard
+              title="Kontanter"
+              value={formatCurrency(portfolio?.cash || 20000)}
+              subtitle="SEK"
+            />
+            <StatCard
+              title="Positioner"
+              value={formatCurrency(portfolio?.positions_value || 0)}
+              subtitle="SEK"
+            />
+            <StatCard
+              title="Avkastning"
+              value={`${(portfolio?.pnl_pct || 0) >= 0 ? '+' : ''}${(portfolio?.pnl_pct || 0).toFixed(2)}%`}
+              subtitle={`${(portfolio?.pnl || 0) >= 0 ? '+' : ''}${formatCurrency(portfolio?.pnl || 0)} SEK`}
+              highlight={(portfolio?.pnl_pct || 0) >= 0}
+            />
+          </div>
+        </section>
 
-      {/* Macro Overview */}
-      <section className="mb-12">
-        <h2 className="text-2xl font-semibold mb-6">Makro & Omvärld</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Commodities */}
-          <div className="bg-gray-900 rounded-2xl p-6">
-            <h3 className="text-lg font-medium mb-4 text-gray-400">Råvaror</h3>
-            <div className="space-y-3">
-              {commodities.map(m => (
-                <MacroRow key={m.symbol} item={m} />
+        {/* Trades */}
+        <section className="mb-12">
+          <h2 className="text-2xl font-semibold mb-6">Positioner & Trades</h2>
+          {trades.length === 0 ? (
+            <div className="bg-gray-900 rounded-2xl p-8 text-center">
+              <p className="text-gray-500">Inga trades ännu.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {trades.map((trade) => (
+                <TradeCard 
+                  key={trade.id} 
+                  trade={trade} 
+                  currentPrice={getCurrentPrice(trade.ticker)}
+                />
               ))}
             </div>
-          </div>
-          
-          {/* Currencies */}
-          <div className="bg-gray-900 rounded-2xl p-6">
-            <h3 className="text-lg font-medium mb-4 text-gray-400">Valutor</h3>
-            <div className="space-y-3">
-              {currencies.map(m => (
-                <MacroRow key={m.symbol} item={m} />
-              ))}
-            </div>
-          </div>
-          
-          {/* Indices */}
-          <div className="bg-gray-900 rounded-2xl p-6">
-            <h3 className="text-lg font-medium mb-4 text-gray-400">Index</h3>
-            <div className="space-y-3">
-              {indices.map(m => (
-                <MacroRow key={m.symbol} item={m} />
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Recent Trades */}
-      <section className="mb-12">
-        <h2 className="text-2xl font-semibold mb-6">Senaste trades</h2>
-        {trades.length === 0 ? (
-          <div className="bg-gray-900 rounded-2xl p-8 text-center">
-            <p className="text-gray-500">Inga trades ännu. Agenten analyserar marknaden...</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {trades.map((trade) => (
-              <TradeCard key={trade.id} trade={trade} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Stock Overview */}
-      <section className="mb-12">
-        <h2 className="text-2xl font-semibold mb-6">Aktier ({stocks.length} st)</h2>
-        <div className="bg-gray-900 rounded-2xl p-6 overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="text-left text-gray-500 border-b border-gray-800">
-                <th className="pb-3">Ticker</th>
-                <th className="pb-3">Pris</th>
-                <th className="pb-3">Sektor</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stocks.slice(0, 20).map(stock => (
-                <tr key={stock.ticker} className="border-b border-gray-800/50">
-                  <td className="py-3 font-medium">{stock.ticker}</td>
-                  <td className="py-3">{parseFloat(String(stock.price)).toFixed(2)} SEK</td>
-                  <td className="py-3 text-gray-500">{stock.sector || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {stocks.length > 20 && (
-            <p className="text-gray-500 mt-4 text-center">
-              + {stocks.length - 20} fler aktier
-            </p>
           )}
-        </div>
-      </section>
+        </section>
 
-      {/* Agent Status */}
-      <section>
-        <h2 className="text-2xl font-semibold mb-6">Agent Status</h2>
-        <div className="bg-gray-900 rounded-2xl p-6">
-          <div className="flex items-center gap-3">
-            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-            <span>Aktiv — Analyserar marknaden</span>
+        {/* Stock Overview */}
+        <section className="mb-12">
+          <h2 className="text-2xl font-semibold mb-6">Bevakade aktier ({stocks.length})</h2>
+          <div className="bg-gray-900 rounded-2xl p-6 overflow-x-auto">
+            <div className="grid grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3 text-sm">
+              {stocks.map(stock => (
+                <div key={stock.ticker} className="text-center">
+                  <div className="font-medium">{stock.ticker}</div>
+                  <div className="text-gray-500">{parseFloat(String(stock.price)).toFixed(0)}</div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="mt-4 text-sm text-gray-500">
-            Senast uppdaterad: {new Date().toLocaleString('sv-SE')}
+        </section>
+
+        {/* Agent Status */}
+        <section>
+          <div className="flex items-center gap-3 text-sm text-gray-500">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+            <span>Agent aktiv · Uppdaterad {new Date().toLocaleTimeString('sv-SE')}</span>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   )
 }
@@ -250,63 +218,73 @@ function StatCard({
       <div className={`text-3xl font-bold ${highlight ? 'text-white' : 'text-red-500'}`}>
         {value}
       </div>
-      <div className="text-sm text-gray-500">{subtitle}</div>
+      <div className={`text-sm ${highlight ? 'text-gray-500' : 'text-red-400'}`}>{subtitle}</div>
     </div>
   )
 }
 
-function MacroRow({ item }: { item: Macro }) {
-  const name = MACRO_NAMES[item.symbol] || item.symbol
-  const changePct = parseFloat(String(item.change_pct))
-  const isPositive = changePct >= 0
-  
-  return (
-    <div className="flex justify-between items-center">
-      <span className="text-gray-300">{name}</span>
-      <div className="text-right">
-        <span className="font-medium">{parseFloat(String(item.value)).toFixed(2)}</span>
-        <span className={`ml-2 text-sm ${isPositive ? 'text-green-500' : 'text-red-500'}`}>
-          {isPositive ? '+' : ''}{changePct.toFixed(1)}%
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function TradeCard({ trade }: { trade: Trade }) {
+function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number | null }) {
   const isBuy = trade.action === 'BUY'
+  const entryPrice = parseFloat(String(trade.price))
   const shares = parseFloat(String(trade.shares))
-  const price = parseFloat(String(trade.price))
   const totalValue = parseFloat(String(trade.total_value))
   const confidence = trade.confidence ? parseFloat(String(trade.confidence)) : null
+  
+  // Calculate P&L
+  const currentValue = currentPrice ? shares * currentPrice : null
+  const pnlKr = currentValue ? currentValue - totalValue : null
+  const pnlPct = currentValue ? ((currentValue / totalValue) - 1) * 100 : null
+  const isProfit = pnlKr !== null && pnlKr >= 0
   
   return (
     <div className="bg-gray-900 rounded-2xl p-6">
       <div className="flex justify-between items-start mb-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <span className={`px-2 py-1 rounded text-sm font-medium ${
-              isBuy ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'
-            }`}>
-              {trade.action}
-            </span>
-            <span className="text-xl font-bold">{trade.ticker}</span>
-          </div>
-          <div className="text-sm text-gray-500 mt-1">
-            {shares.toFixed(2)} aktier @ {price.toFixed(2)} SEK
+        <div className="flex items-center gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                isBuy ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'
+              }`}>
+                {trade.action}
+              </span>
+              <span className="text-xl font-bold">{trade.ticker}</span>
+            </div>
+            <div className="text-sm text-gray-500 mt-1">
+              {shares.toFixed(0)} st · {new Date(trade.executed_at).toLocaleDateString('sv-SE')}
+            </div>
           </div>
         </div>
+        
+        {/* Price & P&L */}
         <div className="text-right">
-          <div className="font-semibold">{formatCurrency(totalValue)} SEK</div>
-          <div className="text-sm text-gray-500">
-            {new Date(trade.executed_at).toLocaleDateString('sv-SE')}
+          <div className="flex items-center gap-4 text-sm">
+            <div>
+              <div className="text-gray-500">Köpt</div>
+              <div className="font-medium">{entryPrice.toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Nu</div>
+              <div className="font-medium">{currentPrice?.toFixed(2) || '-'}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">P&L</div>
+              <div className={`font-bold ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+                {pnlPct !== null ? `${isProfit ? '+' : ''}${pnlPct.toFixed(1)}%` : '-'}
+              </div>
+            </div>
+            <div>
+              <div className="text-gray-500">&nbsp;</div>
+              <div className={`font-medium ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+                {pnlKr !== null ? `${isProfit ? '+' : ''}${pnlKr.toFixed(0)} kr` : '-'}
+              </div>
+            </div>
           </div>
         </div>
       </div>
       
-      <div className="border-t border-gray-800 pt-4 mt-4">
-        <div className="text-sm">
-          <strong className="text-gray-400">Varför:</strong> {trade.reasoning}
+      <div className="border-t border-gray-800 pt-4 mt-2">
+        <div className="text-sm text-gray-300">
+          {trade.reasoning}
         </div>
         {trade.hypothesis && (
           <div className="text-sm text-gray-500 mt-2">
@@ -314,7 +292,7 @@ function TradeCard({ trade }: { trade: Trade }) {
           </div>
         )}
         {confidence && (
-          <div className="text-sm text-gray-500 mt-1">
+          <div className="inline-block mt-2 px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-400">
             Confidence: {confidence.toFixed(0)}%
           </div>
         )}
