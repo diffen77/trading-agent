@@ -66,7 +66,7 @@ class PaperTrader:
         }
         """
         ticker = opportunity['ticker']
-        action = opportunity['action']
+        action = opportunity.get('action', 'BUY')
         position_size = opportunity.get('position_size', 2000)
         
         # Get current price
@@ -78,6 +78,18 @@ class PaperTrader:
         current_price = float(prices.iloc[0]['close'])
         shares = position_size / current_price
         
+        # Check we have enough cash for buys
+        if action == 'BUY':
+            balance = self.db.get_balance()
+            if balance['cash'] < position_size:
+                logger.warning(f"Insufficient cash for {ticker}: need {position_size}, have {balance['cash']}")
+                return False
+        
+        # Generate hypothesis if not provided
+        hypothesis = opportunity.get('hypothesis')
+        if not hypothesis:
+            hypothesis = f"Förväntar {'+5-10%' if action == 'BUY' else '-5%'} inom 2 veckor baserat på makrofaktorer"
+        
         # Log the trade
         trade = {
             'ticker': ticker,
@@ -85,18 +97,65 @@ class PaperTrader:
             'shares': shares,
             'price': current_price,
             'total_value': position_size,
-            'reasoning': opportunity['reasoning'],
+            'reasoning': opportunity.get('reasoning', opportunity.get('thesis', 'Autonom handel')),
             'confidence': opportunity.get('confidence'),
-            'hypothesis': opportunity.get('hypothesis'),
+            'hypothesis': hypothesis,
             'macro_context': opportunity.get('macro_context', {}),
         }
         
         self.db.log_trade(trade)
         
-        logger.info(f"📝 Trade executed: {action} {shares:.2f} {ticker} @ {current_price:.2f}")
-        logger.info(f"   Reasoning: {opportunity['reasoning']}")
+        logger.info(f"🤖 AGENT TRADE: {action} {shares:.2f} {ticker} @ {current_price:.2f} SEK")
+        logger.info(f"   Confidence: {opportunity.get('confidence', 'N/A')}%")
+        logger.info(f"   Reasoning: {trade['reasoning'][:100]}...")
         
         return True
+    
+    def auto_trade(self, opportunities: List[Dict], min_confidence: float = 65, max_positions: int = 5, position_size: float = 2000) -> List[Dict]:
+        """
+        Autonomous trading based on opportunities.
+        
+        Rules:
+        - Only trade if confidence >= min_confidence
+        - Max max_positions open at a time
+        - Fixed position_size per trade
+        - Don't buy same stock twice
+        """
+        executed = []
+        
+        # Get current positions
+        portfolio = self.db.get_portfolio()
+        current_tickers = set(portfolio['ticker'].tolist()) if not portfolio.empty else set()
+        num_positions = len(current_tickers)
+        
+        # Filter and sort opportunities
+        tradeable = [
+            o for o in opportunities 
+            if o['confidence'] >= min_confidence 
+            and o['ticker'] not in current_tickers
+        ]
+        tradeable.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        # Execute trades
+        for opp in tradeable:
+            if num_positions >= max_positions:
+                logger.info(f"Max positions ({max_positions}) reached, skipping {opp['ticker']}")
+                break
+            
+            opp['position_size'] = position_size
+            opp['action'] = 'BUY'
+            
+            if self.execute_trade(opp):
+                executed.append(opp)
+                num_positions += 1
+                logger.info(f"✅ Executed: {opp['ticker']} @ {opp['confidence']:.0f}% confidence")
+        
+        if executed:
+            logger.info(f"🤖 Agent executed {len(executed)} trades")
+        else:
+            logger.info(f"🤖 No trades executed (min confidence: {min_confidence}%)")
+        
+        return executed
     
     def check_positions(self):
         """Check current positions for stop-loss or take-profit."""
@@ -181,6 +240,117 @@ class PaperTrader:
         # - If certain macro conditions predict outcomes → add learning
         
         logger.info("Learning extraction complete")
+    
+    def validate_hypotheses(self, days_to_check: int = 14) -> List[Dict]:
+        """
+        Check if past trade hypotheses were correct.
+        Updates trades with outcome and extracts learnings.
+        """
+        logger.info(f"🔍 Validating hypotheses (trades older than {days_to_check} days)...")
+        
+        # Get trades that need validation
+        trades = self.db.get_trades(limit=50)
+        validated = []
+        
+        if trades.empty:
+            return validated
+        
+        for _, trade in trades.iterrows():
+            # Skip if already validated
+            if trade.get('outcome_correct') is not None:
+                continue
+            
+            # Skip if too recent
+            trade_date = trade['executed_at']
+            if isinstance(trade_date, str):
+                trade_date = datetime.fromisoformat(trade_date.replace('Z', '+00:00'))
+            
+            days_since = (datetime.now() - trade_date.replace(tzinfo=None)).days
+            if days_since < days_to_check:
+                continue
+            
+            # Get price now vs entry
+            ticker = trade['ticker']
+            entry_price = float(trade['price'])
+            
+            prices = self.db.get_latest_prices([ticker])
+            if prices.empty:
+                continue
+            
+            current_price = float(prices.iloc[0]['close'])
+            pnl_pct = ((current_price / entry_price) - 1) * 100
+            
+            # Determine if hypothesis was correct
+            # For BUY: correct if price went up
+            action = trade['action']
+            if action == 'BUY':
+                correct = pnl_pct > 0
+            else:  # SELL
+                correct = pnl_pct < 0
+            
+            outcome = f"{'Korrekt' if correct else 'Fel'}. Pris: {entry_price:.2f} → {current_price:.2f} ({pnl_pct:+.1f}%)"
+            
+            # Update trade with outcome
+            try:
+                self.db.execute("""
+                    UPDATE trades SET 
+                        outcome = %s,
+                        outcome_correct = %s,
+                        pnl = %s
+                    WHERE id = %s
+                """, (outcome, correct, pnl_pct * float(trade['shares']) * entry_price / 100, int(trade['id'])))
+                
+                validated.append({
+                    'ticker': ticker,
+                    'correct': correct,
+                    'pnl_pct': pnl_pct,
+                    'hypothesis': trade.get('hypothesis', ''),
+                    'outcome': outcome,
+                })
+                
+                # Extract learning
+                self._extract_learning_from_trade(trade, correct, pnl_pct)
+                
+                logger.info(f"  {'✅' if correct else '❌'} {ticker}: {outcome}")
+                
+            except Exception as e:
+                logger.error(f"Error validating {ticker}: {e}")
+        
+        if validated:
+            logger.info(f"📊 Validated {len(validated)} trades: {sum(1 for v in validated if v['correct'])}/{len(validated)} correct")
+        
+        return validated
+    
+    def _extract_learning_from_trade(self, trade, correct: bool, pnl_pct: float):
+        """Extract a learning from a validated trade."""
+        ticker = trade['ticker']
+        reasoning = trade.get('reasoning', '')
+        hypothesis = trade.get('hypothesis', '')
+        
+        if correct and pnl_pct > 5:
+            # Strong win - learn what worked
+            learning = {
+                'category': 'pattern',
+                'content': f"[FUNKAR] {ticker}: {reasoning[:100]}. Resultat: {pnl_pct:+.1f}%",
+                'source_trade_ids': [int(trade['id'])],
+                'confidence': min(80, 50 + pnl_pct),
+            }
+        elif not correct and pnl_pct < -5:
+            # Strong loss - learn what didn't work
+            learning = {
+                'category': 'mistake',
+                'content': f"[UNDVIK] {ticker}: {reasoning[:100]}. Resultat: {pnl_pct:+.1f}%",
+                'source_trade_ids': [int(trade['id'])],
+                'confidence': min(80, 50 + abs(pnl_pct)),
+            }
+        else:
+            return  # Not significant enough to learn from
+        
+        try:
+            self.db.add_learning(learning)
+            logger.info(f"📚 Learning added: {learning['content'][:60]}...")
+        except Exception as e:
+            logger.error(f"Error adding learning: {e}")
     
     def generate_trade_report(self, trade_id: int) -> str:
         """

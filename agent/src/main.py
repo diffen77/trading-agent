@@ -144,7 +144,7 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     Market open routine (09:00).
     - Fresh price update
     - Find opportunities
-    - Consider entries (but be careful!)
+    - AUTO-TRADE if confidence >= 65%
     """
     logger.info("📈 Market open routine starting...")
     
@@ -154,16 +154,13 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     # Find opportunities
     opportunities = analyzer.find_opportunities()
     
-    # Log high-confidence opportunities
-    high_conf = [o for o in opportunities if o['confidence'] >= 70]
-    
-    for opp in high_conf[:3]:  # Max 3 potential trades
-        logger.info(f"🎯 High confidence opportunity: {opp['ticker']}")
-        logger.info(f"   Confidence: {opp['confidence']:.0f}%")
-        logger.info(f"   Thesis: {opp['thesis']}")
-        
-        # For now, don't auto-trade. Just log.
-        # TODO: Add auto-trading with proper risk management
+    # AUTO-TRADE: Execute trades for high-confidence opportunities
+    executed = trader.auto_trade(
+        opportunities,
+        min_confidence=65,  # Trade if >= 65% confidence
+        max_positions=5,    # Max 5 positions
+        position_size=2000  # 2000 SEK per position
+    )
     
     # Update prospects
     analyzer.update_prospects()
@@ -171,7 +168,13 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     # Save snapshot
     db.save_portfolio_snapshot()
     
+    if executed:
+        logger.info(f"🤖 Agent executed {len(executed)} autonomous trades!")
+        for trade in executed:
+            logger.info(f"   - {trade['ticker']}: {trade['confidence']:.0f}% confidence")
+    
     logger.info("✅ Market open routine complete")
+    return executed
 
 
 def run_midday_routine(yahoo, db, trader):
@@ -228,11 +231,14 @@ def run_eod_routine(yahoo, db, analyzer, trader):
 def run_evening_routine(db, analyzer, trader):
     """
     Evening routine (22:00).
+    - Validate old hypotheses (learning!)
     - Weekly review (if Friday)
     - Extract learnings
-    - Deep analysis
     """
     logger.info("🌙 Evening routine starting...")
+    
+    # Validate hypotheses from trades 14+ days old
+    validated = trader.validate_hypotheses(days_to_check=14)
     
     # Weekly review on Fridays
     if datetime.now().weekday() == 4:
@@ -246,6 +252,7 @@ def run_evening_routine(db, analyzer, trader):
     db.save_portfolio_snapshot()
     
     logger.info("✅ Evening routine complete")
+    return validated
 
 
 def run_full_analysis(yahoo, db, analyzer):
