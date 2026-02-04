@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 interface PortfolioData {
   cash: number
@@ -28,8 +28,6 @@ interface Stock {
   ticker: string
   price: number
   date: string
-  name?: string
-  sector?: string
 }
 
 interface Macro {
@@ -41,8 +39,6 @@ interface Macro {
 
 const MACRO_NAMES: Record<string, string> = {
   'GC=F': '🥇 Guld',
-  'SI=F': '🥈 Silver', 
-  'CL=F': '🛢️ WTI',
   'BZ=F': '🛢️ Brent',
   'HG=F': '🔶 Koppar',
   'EURSEK=X': '€/SEK',
@@ -56,14 +52,12 @@ export default function Dashboard() {
   const [stocks, setStocks] = useState<Stock[]>([])
   const [macro, setMacro] = useState<Macro[]>([])
   const [loading, setLoading] = useState(true)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  
+  // Refs to track previous values for animations
+  const prevPortfolio = useRef<PortfolioData | null>(null)
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 60000)
-    return () => clearInterval(interval)
-  }, [])
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const [portfolioRes, tradesRes, stocksRes, macroRes] = await Promise.all([
         fetch('/api/portfolio'),
@@ -72,18 +66,30 @@ export default function Dashboard() {
         fetch('/api/macro'),
       ])
       
-      if (portfolioRes.ok) setPortfolio(await portfolioRes.json())
+      if (portfolioRes.ok) {
+        const newPortfolio = await portfolioRes.json()
+        prevPortfolio.current = portfolio
+        setPortfolio(newPortfolio)
+      }
       if (tradesRes.ok) setTrades(await tradesRes.json())
       if (stocksRes.ok) setStocks(await stocksRes.json())
       if (macroRes.ok) setMacro(await macroRes.json())
+      
+      setLastUpdate(new Date())
     } catch (error) {
       console.error('Error fetching data:', error)
     } finally {
       setLoading(false)
     }
-  }
+  }, [portfolio])
 
-  // Get current price for a ticker
+  useEffect(() => {
+    fetchData()
+    // Poll every 30 seconds for real-time feel
+    const interval = setInterval(fetchData, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
   const getCurrentPrice = (ticker: string): number | null => {
     const stock = stocks.find(s => s.ticker === ticker)
     return stock ? parseFloat(String(stock.price)) : null
@@ -97,7 +103,6 @@ export default function Dashboard() {
     )
   }
 
-  // Filter macro for header - only key ones
   const headerMacro = macro.filter(m => 
     ['GC=F', 'BZ=F', 'HG=F', 'EURSEK=X', 'USDSEK=X', '^OMX'].includes(m.symbol)
   )
@@ -109,19 +114,9 @@ export default function Dashboard() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <h1 className="text-xl font-bold">Trading Agent</h1>
           <div className="flex gap-4 text-xs">
-            {headerMacro.map(m => {
-              const changePct = parseFloat(String(m.change_pct))
-              const isPositive = changePct >= 0
-              return (
-                <div key={m.symbol} className="flex items-center gap-1">
-                  <span className="text-gray-500">{MACRO_NAMES[m.symbol] || m.symbol}</span>
-                  <span className="font-medium">{parseFloat(String(m.value)).toFixed(m.type === 'currency' ? 2 : 0)}</span>
-                  <span className={isPositive ? 'text-green-500' : 'text-red-500'}>
-                    {isPositive ? '↑' : '↓'}{Math.abs(changePct).toFixed(1)}%
-                  </span>
-                </div>
-              )
-            })}
+            {headerMacro.map(m => (
+              <MacroChip key={m.symbol} item={m} />
+            ))}
           </div>
         </div>
       </header>
@@ -130,26 +125,30 @@ export default function Dashboard() {
         {/* Portfolio Overview */}
         <section className="mb-12">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <StatCard
+            <AnimatedStatCard
               title="Totalt värde"
-              value={formatCurrency(portfolio?.total_value || 20000)}
-              subtitle="SEK"
+              value={portfolio?.total_value || 20000}
+              format="currency"
+              prevValue={prevPortfolio.current?.total_value}
             />
-            <StatCard
+            <AnimatedStatCard
               title="Kontanter"
-              value={formatCurrency(portfolio?.cash || 20000)}
-              subtitle="SEK"
+              value={portfolio?.cash || 20000}
+              format="currency"
+              prevValue={prevPortfolio.current?.cash}
             />
-            <StatCard
+            <AnimatedStatCard
               title="Positioner"
-              value={formatCurrency(portfolio?.positions_value || 0)}
-              subtitle="SEK"
+              value={portfolio?.positions_value || 0}
+              format="currency"
+              prevValue={prevPortfolio.current?.positions_value}
             />
-            <StatCard
+            <AnimatedStatCard
               title="Avkastning"
-              value={`${(portfolio?.pnl_pct || 0) >= 0 ? '+' : ''}${(portfolio?.pnl_pct || 0).toFixed(2)}%`}
+              value={portfolio?.pnl_pct || 0}
+              format="percent"
               subtitle={`${(portfolio?.pnl || 0) >= 0 ? '+' : ''}${formatCurrency(portfolio?.pnl || 0)} SEK`}
-              highlight={(portfolio?.pnl_pct || 0) >= 0}
+              prevValue={prevPortfolio.current?.pnl_pct}
             />
           </div>
         </section>
@@ -174,26 +173,11 @@ export default function Dashboard() {
           )}
         </section>
 
-        {/* Stock Overview */}
-        <section className="mb-12">
-          <h2 className="text-2xl font-semibold mb-6">Bevakade aktier ({stocks.length})</h2>
-          <div className="bg-gray-900 rounded-2xl p-6 overflow-x-auto">
-            <div className="grid grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3 text-sm">
-              {stocks.map(stock => (
-                <div key={stock.ticker} className="text-center">
-                  <div className="font-medium">{stock.ticker}</div>
-                  <div className="text-gray-500">{parseFloat(String(stock.price)).toFixed(0)}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Agent Status */}
+        {/* Status */}
         <section>
           <div className="flex items-center gap-3 text-sm text-gray-500">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span>Agent aktiv · Uppdaterad {new Date().toLocaleTimeString('sv-SE')}</span>
+            <span>Agent aktiv · Uppdaterad {lastUpdate.toLocaleTimeString('sv-SE')}</span>
           </div>
         </section>
       </div>
@@ -201,24 +185,74 @@ export default function Dashboard() {
   )
 }
 
-function StatCard({ 
+// Animated stat card that highlights changes
+function AnimatedStatCard({ 
   title, 
   value, 
-  subtitle, 
-  highlight = true 
+  format,
+  subtitle,
+  prevValue 
 }: { 
   title: string
-  value: string
-  subtitle: string
-  highlight?: boolean 
+  value: number
+  format: 'currency' | 'percent'
+  subtitle?: string
+  prevValue?: number
 }) {
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null)
+  
+  useEffect(() => {
+    if (prevValue !== undefined && prevValue !== value) {
+      setFlash(value > prevValue ? 'up' : 'down')
+      const timer = setTimeout(() => setFlash(null), 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [value, prevValue])
+
+  const isPositive = value >= 0
+  const displayValue = format === 'currency' 
+    ? formatCurrency(value)
+    : `${isPositive ? '+' : ''}${value.toFixed(2)}%`
+
+  const flashClass = flash === 'up' 
+    ? 'bg-green-900/50' 
+    : flash === 'down' 
+    ? 'bg-red-900/50' 
+    : 'bg-gray-900'
+
   return (
-    <div className="bg-gray-900 rounded-2xl p-6">
+    <div className={`rounded-2xl p-6 transition-colors duration-300 ${flashClass}`}>
       <div className="text-sm text-gray-500 mb-1">{title}</div>
-      <div className={`text-3xl font-bold ${highlight ? 'text-white' : 'text-red-500'}`}>
-        {value}
+      <div className={`text-3xl font-bold transition-all duration-300 ${
+        format === 'percent' 
+          ? isPositive ? 'text-green-500' : 'text-red-500'
+          : 'text-white'
+      }`}>
+        {displayValue}
       </div>
-      <div className={`text-sm ${highlight ? 'text-gray-500' : 'text-red-400'}`}>{subtitle}</div>
+      {subtitle && (
+        <div className={`text-sm ${isPositive ? 'text-gray-500' : 'text-red-400'}`}>
+          {subtitle}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MacroChip({ item }: { item: Macro }) {
+  const name = MACRO_NAMES[item.symbol] || item.symbol
+  const changePct = parseFloat(String(item.change_pct))
+  const isPositive = changePct >= 0
+  
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-gray-500">{name}</span>
+      <span className="font-medium">
+        {parseFloat(String(item.value)).toFixed(item.type === 'currency' ? 2 : 0)}
+      </span>
+      <span className={isPositive ? 'text-green-500' : 'text-red-500'}>
+        {isPositive ? '↑' : '↓'}{Math.abs(changePct).toFixed(1)}%
+      </span>
     </div>
   )
 }
@@ -230,7 +264,6 @@ function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number
   const totalValue = parseFloat(String(trade.total_value))
   const confidence = trade.confidence ? parseFloat(String(trade.confidence)) : null
   
-  // Calculate P&L
   const currentValue = currentPrice ? shares * currentPrice : null
   const pnlKr = currentValue ? currentValue - totalValue : null
   const pnlPct = currentValue ? ((currentValue / totalValue) - 1) * 100 : null
@@ -255,7 +288,6 @@ function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number
           </div>
         </div>
         
-        {/* Price & P&L */}
         <div className="text-right">
           <div className="flex items-center gap-4 text-sm">
             <div>
@@ -283,9 +315,7 @@ function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number
       </div>
       
       <div className="border-t border-gray-800 pt-4 mt-2">
-        <div className="text-sm text-gray-300">
-          {trade.reasoning}
-        </div>
+        <div className="text-sm text-gray-300">{trade.reasoning}</div>
         {trade.hypothesis && (
           <div className="text-sm text-gray-500 mt-2">
             <strong>Hypotes:</strong> {trade.hypothesis}
