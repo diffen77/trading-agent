@@ -88,7 +88,15 @@ class PaperTrader:
         # Generate hypothesis if not provided
         hypothesis = opportunity.get('hypothesis')
         if not hypothesis:
-            hypothesis = f"Förväntar {'+5-10%' if action == 'BUY' else '-5%'} inom 2 veckor baserat på makrofaktorer"
+            # Build specific hypothesis from impacts
+            impacts = opportunity.get('impacts', [])
+            positive_factors = [i['reason'] for i in impacts if i.get('direction') == 'positive']
+            
+            if positive_factors:
+                factors_text = ', '.join(positive_factors[:2])
+                hypothesis = f"Förväntar +5-10% inom 2 veckor. Triggers: {factors_text}"
+            else:
+                hypothesis = f"Förväntar +5-10% inom 2 veckor baserat på sektoranalys och momentum"
         
         # Log the trade
         trade = {
