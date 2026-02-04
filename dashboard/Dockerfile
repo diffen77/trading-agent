@@ -1,17 +1,22 @@
-FROM node:20-alpine
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy app
 COPY . .
-
-# Build
 RUN npm run build
 
-# Run
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
 EXPOSE 3000
-CMD ["npm", "start"]
+
+CMD ["node", "server.js"]
