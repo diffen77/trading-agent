@@ -98,6 +98,12 @@ class PaperTrader:
             else:
                 hypothesis = f"Förväntar +5-10% inom 2 veckor baserat på sektoranalys och momentum"
         
+        # Calculate target and stop-loss
+        target_pct = 10  # +10% target
+        stop_loss_pct = -5  # -5% stop-loss
+        target_price = current_price * (1 + target_pct / 100)
+        stop_loss_price = current_price * (1 + stop_loss_pct / 100)
+        
         # Log the trade
         trade = {
             'ticker': ticker,
@@ -109,9 +115,15 @@ class PaperTrader:
             'confidence': opportunity.get('confidence'),
             'hypothesis': hypothesis,
             'macro_context': opportunity.get('macro_context', {}),
+            'target_price': target_price,
+            'stop_loss': stop_loss_price,
+            'target_pct': target_pct,
+            'stop_loss_pct': stop_loss_pct,
         }
         
         self.db.log_trade(trade)
+        
+        logger.info(f"   📈 Target: {target_price:.2f} (+{target_pct}%) | 📉 Stop-loss: {stop_loss_price:.2f} ({stop_loss_pct}%)")
         
         logger.info(f"🤖 AGENT TRADE: {action} {shares:.2f} {ticker} @ {current_price:.2f} SEK")
         logger.info(f"   Confidence: {opportunity.get('confidence', 'N/A')}%")

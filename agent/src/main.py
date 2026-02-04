@@ -29,6 +29,7 @@ from datetime import datetime
 
 from .data.yahoo import YahooDataFetcher
 from .data.database import Database
+from .data.news import NewsFetcher
 from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
 
@@ -118,6 +119,7 @@ def run_morning_routine(yahoo, db, analyzer):
     """
     Pre-market analysis routine (07:00).
     - Update macro data
+    - Fetch news and analyze sentiment
     - Generate morning briefing
     - Update prospects
     """
@@ -128,6 +130,18 @@ def run_morning_routine(yahoo, db, analyzer):
     
     # Update stock prices
     yahoo.update_all_prices(db)
+    
+    # Fetch and analyze news
+    logger.info("📰 Fetching news...")
+    news_fetcher = NewsFetcher(db)
+    try:
+        news = news_fetcher.fetch_all_news()
+        news_fetcher.save_news(news)
+        news_briefing = news_fetcher.generate_news_briefing()
+        logger.info(news_briefing)
+    except Exception as e:
+        logger.warning(f"News fetch failed: {e}")
+        news_briefing = "Nyheter ej tillgängliga"
     
     # Generate morning briefing
     briefing = analyzer.generate_morning_briefing()

@@ -163,9 +163,11 @@ class Database:
             # Log the trade
             session.execute(text("""
                 INSERT INTO trades (ticker, action, shares, price, total_value,
-                    reasoning, confidence, hypothesis, macro_context)
+                    reasoning, confidence, hypothesis, macro_context,
+                    target_price, stop_loss, target_pct, stop_loss_pct)
                 VALUES (:ticker, :action, :shares, :price, :total_value,
-                    :reasoning, :confidence, :hypothesis, :macro_context)
+                    :reasoning, :confidence, :hypothesis, :macro_context,
+                    :target_price, :stop_loss, :target_pct, :stop_loss_pct)
             """), {
                 'ticker': trade['ticker'],
                 'action': trade['action'],
@@ -176,6 +178,10 @@ class Database:
                 'confidence': trade.get('confidence'),
                 'hypothesis': trade.get('hypothesis'),
                 'macro_context': str(trade.get('macro_context', {})),
+                'target_price': trade.get('target_price'),
+                'stop_loss': trade.get('stop_loss'),
+                'target_pct': trade.get('target_pct', 10),
+                'stop_loss_pct': trade.get('stop_loss_pct', -5),
             })
             
             # Update balance
