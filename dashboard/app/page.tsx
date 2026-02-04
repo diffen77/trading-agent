@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
 
 interface PortfolioData {
   cash: number
@@ -8,6 +9,11 @@ interface PortfolioData {
   total_value: number
   pnl: number
   pnl_pct: number
+}
+
+interface HistoryPoint {
+  total_value: number
+  recorded_at: string
 }
 
 interface Trade {
@@ -58,26 +64,31 @@ const MACRO_NAMES: Record<string, string> = {
   '^OMX': 'OMX30',
 }
 
+const PERIODS = ['1D', '1W', '1M', 'YTD', '1Y'] as const
+type Period = typeof PERIODS[number]
+
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
+  const [history, setHistory] = useState<HistoryPoint[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
   const [stocks, setStocks] = useState<Stock[]>([])
   const [macro, setMacro] = useState<Macro[]>([])
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [selectedPeriod, setSelectedPeriod] = useState<Period>('1M')
   
-  // Refs to track previous values for animations
   const prevPortfolio = useRef<PortfolioData | null>(null)
 
   const fetchData = useCallback(async () => {
     try {
-      const [portfolioRes, tradesRes, stocksRes, macroRes, prospectsRes] = await Promise.all([
+      const [portfolioRes, tradesRes, stocksRes, macroRes, prospectsRes, historyRes] = await Promise.all([
         fetch('/api/portfolio'),
         fetch('/api/trades'),
         fetch('/api/stocks'),
         fetch('/api/macro'),
         fetch('/api/prospects'),
+        fetch(`/api/history?period=${selectedPeriod}`),
       ])
       
       if (portfolioRes.ok) {
@@ -89,6 +100,7 @@ export default function Dashboard() {
       if (stocksRes.ok) setStocks(await stocksRes.json())
       if (macroRes.ok) setMacro(await macroRes.json())
       if (prospectsRes.ok) setProspects(await prospectsRes.json())
+      if (historyRes.ok) setHistory(await historyRes.json())
       
       setLastUpdate(new Date())
     } catch (error) {
@@ -96,19 +108,30 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [portfolio])
+  }, [portfolio, selectedPeriod])
 
   useEffect(() => {
     fetchData()
-    // Poll every 30 seconds for real-time feel
     const interval = setInterval(fetchData, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [selectedPeriod])
 
   const getCurrentPrice = (ticker: string): number | null => {
     const stock = stocks.find(s => s.ticker === ticker)
     return stock ? parseFloat(String(stock.price)) : null
   }
+
+  // Calculate period performance
+  const periodPerformance = () => {
+    if (history.length < 2) return { pnl: 0, pnlPct: 0 }
+    const start = parseFloat(String(history[0]?.total_value || 20000))
+    const end = parseFloat(String(portfolio?.total_value || start))
+    const pnl = end - start
+    const pnlPct = ((end / start) - 1) * 100
+    return { pnl, pnlPct }
+  }
+
+  const { pnl: periodPnl, pnlPct: periodPnlPct } = periodPerformance()
 
   if (loading) {
     return (
@@ -121,6 +144,26 @@ export default function Dashboard() {
   const headerMacro = macro.filter(m => 
     ['GC=F', 'BZ=F', 'HG=F', 'EURSEK=X', 'USDSEK=X', '^OMX'].includes(m.symbol)
   )
+
+  // Prepare chart data
+  const chartData = history.map(h => ({
+    date: new Date(h.recorded_at).toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' }),
+    value: parseFloat(String(h.total_value)),
+  }))
+
+  // Add current value if different from last history point
+  if (portfolio && chartData.length > 0) {
+    const lastHistoryValue = chartData[chartData.length - 1].value
+    const currentValue = parseFloat(String(portfolio.total_value))
+    if (Math.abs(currentValue - lastHistoryValue) > 1) {
+      chartData.push({
+        date: 'Nu',
+        value: currentValue,
+      })
+    }
+  }
+
+  const isPositivePeriod = periodPnlPct >= 0
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -137,34 +180,121 @@ export default function Dashboard() {
       </header>
 
       <div className="max-w-7xl mx-auto p-8">
-        {/* Portfolio Overview */}
+        {/* Hero Portfolio Section with Chart */}
         <section className="mb-12">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <AnimatedStatCard
-              title="Totalt värde"
-              value={portfolio?.total_value || 20000}
-              format="currency"
-              prevValue={prevPortfolio.current?.total_value}
-            />
-            <AnimatedStatCard
-              title="Kontanter"
-              value={portfolio?.cash || 20000}
-              format="currency"
-              prevValue={prevPortfolio.current?.cash}
-            />
-            <AnimatedStatCard
-              title="Positioner"
-              value={portfolio?.positions_value || 0}
-              format="currency"
-              prevValue={prevPortfolio.current?.positions_value}
-            />
-            <AnimatedStatCard
-              title="Avkastning"
-              value={portfolio?.pnl_pct || 0}
-              format="percent"
-              subtitle={`${(portfolio?.pnl || 0) >= 0 ? '+' : ''}${formatCurrency(portfolio?.pnl || 0)} SEK`}
-              prevValue={prevPortfolio.current?.pnl_pct}
-            />
+          <div className="bg-gray-900 rounded-3xl p-8">
+            {/* Top row: Value and Period selector */}
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <div className="text-gray-500 text-sm mb-1">Totalt värde</div>
+                <div className="text-5xl font-bold tracking-tight">
+                  {formatCurrency(portfolio?.total_value || 20000)} <span className="text-2xl text-gray-500">SEK</span>
+                </div>
+                <div className={`text-lg mt-2 ${isPositivePeriod ? 'text-green-500' : 'text-red-500'}`}>
+                  {isPositivePeriod ? '+' : ''}{periodPnlPct.toFixed(2)}% 
+                  <span className="text-gray-500 ml-2">
+                    ({isPositivePeriod ? '+' : ''}{formatCurrency(periodPnl)} kr)
+                  </span>
+                </div>
+              </div>
+              
+              {/* Period Selector */}
+              <div className="flex gap-1 bg-gray-800 rounded-xl p-1">
+                {PERIODS.map(period => (
+                  <button
+                    key={period}
+                    onClick={() => setSelectedPeriod(period)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      selectedPeriod === period 
+                        ? 'bg-white text-black' 
+                        : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    {period}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Chart */}
+            <div className="h-64 mt-4">
+              {chartData.length > 1 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                        <stop 
+                          offset="5%" 
+                          stopColor={isPositivePeriod ? '#22c55e' : '#ef4444'} 
+                          stopOpacity={0.3}
+                        />
+                        <stop 
+                          offset="95%" 
+                          stopColor={isPositivePeriod ? '#22c55e' : '#ef4444'} 
+                          stopOpacity={0}
+                        />
+                      </linearGradient>
+                    </defs>
+                    <XAxis 
+                      dataKey="date" 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#6b7280', fontSize: 12 }}
+                    />
+                    <YAxis 
+                      domain={['dataMin - 500', 'dataMax + 500']}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#6b7280', fontSize: 12 }}
+                      tickFormatter={(v) => `${(v/1000).toFixed(0)}k`}
+                    />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: '#1f2937', 
+                        border: 'none', 
+                        borderRadius: '12px',
+                        padding: '12px'
+                      }}
+                      labelStyle={{ color: '#9ca3af' }}
+                      formatter={(value: number) => [`${formatCurrency(value)} SEK`, 'Värde']}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="value"
+                      stroke={isPositivePeriod ? '#22c55e' : '#ef4444'}
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorValue)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-gray-500">
+                  <div className="text-center">
+                    <div className="text-4xl mb-2">📊</div>
+                    <div>Graf visas när mer data finns</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-6 mt-8 pt-6 border-t border-gray-800">
+              <div>
+                <div className="text-gray-500 text-sm">Kontanter</div>
+                <div className="text-2xl font-semibold">{formatCurrency(portfolio?.cash || 20000)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500 text-sm">Investerat</div>
+                <div className="text-2xl font-semibold">{formatCurrency(portfolio?.positions_value || 0)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500 text-sm">Total avkastning</div>
+                <div className={`text-2xl font-semibold ${(portfolio?.pnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  {(portfolio?.pnl || 0) >= 0 ? '+' : ''}{formatCurrency(portfolio?.pnl || 0)}
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -213,60 +343,6 @@ export default function Dashboard() {
         </section>
       </div>
     </main>
-  )
-}
-
-// Animated stat card that highlights changes
-function AnimatedStatCard({ 
-  title, 
-  value, 
-  format,
-  subtitle,
-  prevValue 
-}: { 
-  title: string
-  value: number
-  format: 'currency' | 'percent'
-  subtitle?: string
-  prevValue?: number
-}) {
-  const [flash, setFlash] = useState<'up' | 'down' | null>(null)
-  
-  useEffect(() => {
-    if (prevValue !== undefined && prevValue !== value) {
-      setFlash(value > prevValue ? 'up' : 'down')
-      const timer = setTimeout(() => setFlash(null), 1000)
-      return () => clearTimeout(timer)
-    }
-  }, [value, prevValue])
-
-  const isPositive = value >= 0
-  const displayValue = format === 'currency' 
-    ? formatCurrency(value)
-    : `${isPositive ? '+' : ''}${value.toFixed(2)}%`
-
-  const flashClass = flash === 'up' 
-    ? 'bg-green-900/50' 
-    : flash === 'down' 
-    ? 'bg-red-900/50' 
-    : 'bg-gray-900'
-
-  return (
-    <div className={`rounded-2xl p-6 transition-colors duration-300 ${flashClass}`}>
-      <div className="text-sm text-gray-500 mb-1">{title}</div>
-      <div className={`text-3xl font-bold transition-all duration-300 ${
-        format === 'percent' 
-          ? isPositive ? 'text-green-500' : 'text-red-500'
-          : 'text-white'
-      }`}>
-        {displayValue}
-      </div>
-      {subtitle && (
-        <div className={`text-sm ${isPositive ? 'text-gray-500' : 'text-red-400'}`}>
-          {subtitle}
-        </div>
-      )}
-    </div>
   )
 }
 
