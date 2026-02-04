@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16-alpine
@@ -47,7 +45,7 @@ services:
       DATABASE_URL: postgresql://trading:${DB_PASSWORD:-trading_dev_123}@db:5432/trading_agent
       NEXT_PUBLIC_API_URL: http://localhost:3000
     ports:
-      - "3010:3000"
+      - "3020:3000"
     volumes:
       - ./dashboard:/app
       - /app/node_modules
