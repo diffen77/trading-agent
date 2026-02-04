@@ -5,6 +5,8 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 })
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const result = await pool.query(`
