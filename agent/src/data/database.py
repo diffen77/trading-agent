@@ -175,7 +175,7 @@ class Database:
                 'reasoning': trade['reasoning'],
                 'confidence': trade.get('confidence'),
                 'hypothesis': trade.get('hypothesis'),
-                'macro_context': trade.get('macro_context', '{}'),
+                'macro_context': str(trade.get('macro_context', {})),
             })
             
             # Update balance
