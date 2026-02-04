@@ -242,3 +242,44 @@ class Database:
                 'confidence': learning.get('confidence', 50),
             })
             session.commit()
+    
+    def query(self, sql: str, params: dict = None) -> List[dict]:
+        """Execute a query and return results as list of dicts."""
+        with self.Session() as session:
+            result = session.execute(text(sql), params or {})
+            return [dict(row._mapping) for row in result.fetchall()]
+    
+    def execute(self, sql: str, params: tuple = None):
+        """Execute a statement (INSERT, UPDATE, DELETE)."""
+        with self.Session() as session:
+            # Convert tuple params to dict for SQLAlchemy
+            if params:
+                # Count placeholders and map to params
+                placeholders = sql.count('%s')
+                param_dict = {f'p{i}': params[i] for i in range(len(params))}
+                # Replace %s with :p0, :p1, etc.
+                for i in range(placeholders):
+                    sql = sql.replace('%s', f':p{i}', 1)
+                session.execute(text(sql), param_dict)
+            else:
+                session.execute(text(sql))
+            session.commit()
+    
+    def save_portfolio_snapshot(self):
+        """Save current portfolio value to history."""
+        with self.Session() as session:
+            session.execute(text("""
+                INSERT INTO portfolio_history (total_value, cash, positions_value)
+                SELECT 
+                    b.cash + COALESCE(SUM(p.shares * pr.close), 0) as total_value,
+                    b.cash,
+                    COALESCE(SUM(p.shares * pr.close), 0) as positions_value
+                FROM balance b
+                LEFT JOIN portfolio p ON true
+                LEFT JOIN LATERAL (
+                    SELECT close FROM prices WHERE ticker = p.ticker ORDER BY date DESC LIMIT 1
+                ) pr ON true
+                GROUP BY b.cash
+            """))
+            session.commit()
+            logger.info("📸 Portfolio snapshot saved")
