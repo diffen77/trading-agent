@@ -24,6 +24,7 @@ Run modes:
 
 import os
 import sys
+import time
 import logging
 from datetime import datetime
 
@@ -39,6 +40,16 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Schedule: which hours (CET) to run which routines
+# Docker runs in UTC, so we offset by +1 (CET) or +2 (CEST)
+SCHEDULE_UTC = {
+    6: 'morning',    # 07:00 CET
+    8: 'open',       # 09:00 CET
+    11: 'midday',    # 12:00 CET
+    16: 'close',     # 17:00 CET (close enough to 17:30)
+    21: 'evening',   # 22:00 CET
+}
 
 
 def main():
@@ -56,14 +67,53 @@ def main():
     # Check for command-line mode override
     mode = sys.argv[1] if len(sys.argv) > 1 else None
     
-    if mode:
+    if mode and mode == 'daemon':
+        run_daemon(yahoo, db, analyzer, trader)
+    elif mode:
         run_mode(mode, yahoo, db, analyzer, trader)
+        logger.info("✅ Agent routine complete")
     else:
-        # Auto-detect based on time
-        hour = datetime.now().hour
-        run_scheduled(hour, yahoo, db, analyzer, trader)
+        # Default: run as daemon (keeps container alive)
+        run_daemon(yahoo, db, analyzer, trader)
+
+
+def run_daemon(yahoo, db, analyzer, trader):
+    """Run as a long-lived daemon with scheduled routines."""
+    logger.info("🔄 Running in daemon mode — checking every 5 minutes")
     
-    logger.info("✅ Agent routine complete")
+    last_run_hour = -1
+    
+    while True:
+        try:
+            now = datetime.utcnow()
+            current_hour = now.hour
+            
+            # Run scheduled routine once per hour
+            if current_hour != last_run_hour:
+                if current_hour in SCHEDULE_UTC:
+                    mode = SCHEDULE_UTC[current_hour]
+                    logger.info(f"⏰ Scheduled run: {mode} (UTC {current_hour}:00)")
+                    run_mode(mode, yahoo, db, analyzer, trader)
+                else:
+                    # Off-schedule: just update prices during market hours (07-17 UTC)
+                    if 7 <= current_hour <= 17:
+                        logger.info(f"📊 Hourly price update (UTC {current_hour}:00)")
+                        yahoo.update_all_prices(db)
+                        db.save_portfolio_snapshot()
+                    else:
+                        logger.debug(f"💤 Outside market hours (UTC {current_hour}:00)")
+                
+                last_run_hour = current_hour
+            
+            # Sleep 5 minutes between checks
+            time.sleep(300)
+            
+        except KeyboardInterrupt:
+            logger.info("🛑 Agent shutting down...")
+            break
+        except Exception as e:
+            logger.error(f"❌ Error in daemon loop: {e}", exc_info=True)
+            time.sleep(60)  # Wait 1 min on error, then retry
 
 
 def run_mode(mode: str, yahoo, db, analyzer, trader):
