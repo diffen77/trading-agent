@@ -207,24 +207,24 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     """
     Market open routine (09:00).
     - Fresh price update
-    - Find opportunities
-    - AUTO-TRADE if confidence >= 65%
+    - Find opportunities (NO auto-trade — Börje decides)
+    - Check stop-loss/take-profit on existing positions
     """
     logger.info("📈 Market open routine starting...")
     
     # Fresh price update
     yahoo.update_all_prices(db)
     
-    # Find opportunities
+    # Find opportunities (for Börje to review)
     opportunities = analyzer.find_opportunities()
     
-    # AUTO-TRADE: Execute trades for high-confidence opportunities
-    executed = trader.auto_trade(
-        opportunities,
-        min_confidence=65,  # Trade if >= 65% confidence
-        max_positions=5,    # Max 5 positions
-        position_size=2000  # 2000 SEK per position
-    )
+    if opportunities:
+        logger.info(f"📋 {len(opportunities)} opportunities found (awaiting Börje's decision)")
+        for opp in opportunities[:5]:
+            logger.info(f"   {opp['ticker']}: {opp['confidence']:.0f}% — {opp.get('thesis', 'N/A')}")
+    
+    # Auto stop-loss/take-profit on existing positions (mechanical, no brain needed)
+    trader.check_positions()
     
     # Update prospects
     analyzer.update_prospects()
@@ -232,13 +232,8 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     # Save snapshot
     db.save_portfolio_snapshot()
     
-    if executed:
-        logger.info(f"🤖 Agent executed {len(executed)} autonomous trades!")
-        for trade in executed:
-            logger.info(f"   - {trade['ticker']}: {trade['confidence']:.0f}% confidence")
-    
     logger.info("✅ Market open routine complete")
-    return executed
+    return opportunities
 
 
 def run_midday_routine(yahoo, db, trader):
