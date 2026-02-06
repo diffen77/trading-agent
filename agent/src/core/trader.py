@@ -216,33 +216,138 @@ class PaperTrader:
         logger.info(f"   Total: {portfolio['total_value']:.2f} SEK")
         logger.info(f"   P&L: {portfolio['pnl']:.2f} SEK ({portfolio['pnl_pct']:.2f}%)")
     
+    def record_trade_outcome(self, trade_id: int, current_price: float, entry_price: float, shares: float):
+        """Record a trade outcome checkpoint in trade_outcomes table."""
+        from datetime import date as date_type
+        try:
+            # Get trade date
+            trades = self.db.query(
+                "SELECT executed_at FROM trades WHERE id = :id",
+                {'id': trade_id}
+            )
+            if not trades:
+                return
+            
+            trade_date = trades[0]['executed_at']
+            if isinstance(trade_date, str):
+                trade_date = datetime.fromisoformat(trade_date.replace('Z', '+00:00'))
+            
+            days_since = (datetime.now() - trade_date.replace(tzinfo=None)).days
+            pnl_pct = ((current_price / entry_price) - 1) * 100
+            pnl_amount = (current_price - entry_price) * shares
+            
+            self.db.execute("""
+                INSERT INTO trade_outcomes (trade_id, check_date, days_since_entry, price_at_check, pnl_pct, pnl_amount)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trade_id, check_date) DO UPDATE SET
+                    price_at_check = EXCLUDED.price_at_check,
+                    pnl_pct = EXCLUDED.pnl_pct,
+                    pnl_amount = EXCLUDED.pnl_amount
+            """, (trade_id, date_type.today(), days_since, current_price, pnl_pct, pnl_amount))
+            
+        except Exception as e:
+            logger.error(f"Error recording trade outcome: {e}")
+
     def run_weekly_review(self):
         """
-        Weekly review - analyze trades and extract learnings.
-        
-        Questions to answer:
-        1. Which trades were profitable? Why?
-        2. Which trades lost money? Why?
-        3. Were my hypotheses correct?
-        4. What patterns do I see?
-        5. What should I do differently?
+        Weekly self-review: analyze trades, outcomes, and generate reflection.
         """
         logger.info("📝 Running weekly review...")
         
-        # Get this week's trades
-        trades = self.db.get_trades(limit=100)
+        week_start = (datetime.now() - timedelta(days=7)).date()
+        week_end = datetime.now().date()
         
-        if trades.empty:
+        # Get this week's trades
+        try:
+            week_trades = self.db.query("""
+                SELECT * FROM trades 
+                WHERE executed_at >= :start
+                ORDER BY executed_at
+            """, {'start': week_start})
+        except:
+            week_trades = []
+        
+        if not week_trades:
             logger.info("No trades this week")
             return
         
-        # Filter to this week
-        week_ago = datetime.now() - timedelta(days=7)
-        # TODO: Filter trades by date
+        # Analyze results
+        total = len(week_trades)
+        winning = sum(1 for t in week_trades if float(t.get('pnl', 0) or 0) > 0)
+        losing = sum(1 for t in week_trades if float(t.get('pnl', 0) or 0) < 0)
+        total_pnl = sum(float(t.get('pnl', 0) or 0) for t in week_trades)
+        win_rate = (winning / total * 100) if total > 0 else 0
         
-        # Analyze
-        # TODO: Implement full weekly review logic
+        # Sector breakdown
+        sector_pnl = {}
+        for t in week_trades:
+            ticker = t['ticker']
+            pnl = float(t.get('pnl', 0) or 0)
+            # Get sector from company cache
+            company = self.db.query(
+                "SELECT sector FROM companies WHERE ticker = :t",
+                {'t': ticker}
+            )
+            sector = company[0]['sector'] if company else 'Unknown'
+            sector_pnl[sector] = sector_pnl.get(sector, 0) + pnl
         
+        # Best and worst
+        best = max(week_trades, key=lambda t: float(t.get('pnl', 0) or 0))
+        worst = min(week_trades, key=lambda t: float(t.get('pnl', 0) or 0))
+        
+        # Generate reflection
+        patterns = []
+        adjustments = []
+        
+        if win_rate < 40:
+            adjustments.append("Höj confidence-tröskel — för många förluster")
+        if win_rate > 70:
+            patterns.append("Bra träffsäkerhet — behåll strategi")
+        
+        # Check if any sector consistently loses
+        for sector, pnl in sector_pnl.items():
+            if pnl < -100:
+                adjustments.append(f"Undvik {sector} — negativ vecka ({pnl:.0f} kr)")
+            elif pnl > 100:
+                patterns.append(f"{sector} funkar bra (+{pnl:.0f} kr)")
+        
+        reflection = (
+            f"Vecka {week_start} - {week_end}: {total} trades, "
+            f"{winning}W/{losing}L, winrate {win_rate:.0f}%, "
+            f"PnL {total_pnl:+.0f} kr. "
+            f"Bäst: {best['ticker']} ({float(best.get('pnl', 0) or 0):+.0f} kr), "
+            f"Sämst: {worst['ticker']} ({float(worst.get('pnl', 0) or 0):+.0f} kr)."
+        )
+        
+        # Save review
+        try:
+            self.db.execute("""
+                INSERT INTO reviews (week_start, week_end, total_trades, winning_trades, 
+                    losing_trades, total_pnl, win_rate, patterns_identified, 
+                    strategy_adjustments, reflection)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (week_start) DO UPDATE SET
+                    total_trades = EXCLUDED.total_trades,
+                    winning_trades = EXCLUDED.winning_trades,
+                    losing_trades = EXCLUDED.losing_trades,
+                    total_pnl = EXCLUDED.total_pnl,
+                    win_rate = EXCLUDED.win_rate,
+                    patterns_identified = EXCLUDED.patterns_identified,
+                    strategy_adjustments = EXCLUDED.strategy_adjustments,
+                    reflection = EXCLUDED.reflection
+            """, (
+                str(week_start), str(week_end), total, winning, losing,
+                total_pnl, win_rate,
+                '{' + ','.join(f'"{p}"' for p in patterns) + '}',
+                '{' + ','.join(f'"{a}"' for a in adjustments) + '}',
+                reflection
+            ))
+        except Exception as e:
+            logger.error(f"Error saving review: {e}")
+        
+        logger.info(f"📝 {reflection}")
+        logger.info(f"   Patterns: {patterns}")
+        logger.info(f"   Adjustments: {adjustments}")
         logger.info("Weekly review complete")
     
     def extract_learnings(self):

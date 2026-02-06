@@ -2,7 +2,7 @@
 Market Analyzer
 
 Analyzes companies, macro factors, and finds trading opportunities.
-Understands relationships between macro events and company impacts.
+Uses company database with input dependencies for impact analysis.
 """
 
 import logging
@@ -13,111 +13,13 @@ from decimal import Decimal
 logger = logging.getLogger(__name__)
 
 
-# Company input mappings - what raw materials/factors affect each sector
-SECTOR_INPUTS = {
-    'Industrials': ['steel', 'copper', 'energy', 'EUR/SEK'],
-    'Basic Materials': ['iron', 'copper', 'gold', 'energy'],
-    'Consumer Cyclical': ['cotton', 'EUR/SEK', 'consumer_confidence'],
-    'Technology': ['semiconductors', 'USD/SEK', 'energy'],
-    'Financial Services': ['interest_rates', 'EUR/SEK'],
-    'Healthcare': ['USD/SEK', 'regulatory'],
-    'Energy': ['oil', 'natural_gas', 'EUR/SEK'],
-    'Real Estate': ['interest_rates', 'construction_costs'],
-    'Consumer Defensive': ['food_prices', 'EUR/SEK'],
-    'Communication Services': ['USD/SEK', 'advertising_spend'],
-    'Utilities': ['energy', 'interest_rates'],
-}
-
-# Specific company mappings with detailed info
-COMPANY_DATA = {
-    'VOLV-B': {
-        'name': 'Volvo B',
-        'sector': 'Industrials',
-        'inputs': ['steel', 'copper', 'EUR/SEK', 'oil'],
-        'description': 'Lastbilar, bussar, anläggningsmaskiner',
-        'export_pct': 95,
-        'main_markets': ['Europa', 'Nordamerika', 'Asien'],
-    },
-    'SSAB-A': {
-        'name': 'SSAB A', 
-        'sector': 'Basic Materials',
-        'inputs': ['iron', 'coal', 'energy', 'EUR/SEK'],
-        'description': 'Stålproducent, fossilfritt stål (HYBRIT)',
-        'export_pct': 85,
-        'main_markets': ['Europa', 'Nordamerika'],
-    },
-    'SKF-B': {
-        'name': 'SKF B',
-        'sector': 'Industrials', 
-        'inputs': ['steel', 'EUR/SEK'],
-        'description': 'Kullager, tätningar - fordon och industri',
-        'export_pct': 90,
-        'main_markets': ['Global'],
-    },
-    'SAND': {
-        'name': 'Sandvik',
-        'sector': 'Industrials',
-        'inputs': ['tungsten', 'cobalt', 'EUR/SEK'],
-        'description': 'Verktyg, gruvutrustning, materialteknik',
-        'export_pct': 95,
-        'main_markets': ['Global'],
-    },
-    'HM-B': {
-        'name': 'H&M B',
-        'sector': 'Consumer Cyclical',
-        'inputs': ['cotton', 'USD/SEK', 'shipping'],
-        'description': 'Klädkedja, fast fashion',
-        'export_pct': 80,
-        'main_markets': ['Europa', 'USA', 'Asien'],
-    },
-    'ERIC-B': {
-        'name': 'Ericsson B',
-        'sector': 'Technology',
-        'inputs': ['semiconductors', 'USD/SEK'],
-        'description': '5G-infrastruktur, telekomutrustning',
-        'export_pct': 95,
-        'main_markets': ['Global'],
-    },
-    'SAAB-B': {
-        'name': 'Saab B',
-        'sector': 'Industrials',
-        'inputs': ['aluminum', 'steel', 'EUR/SEK'],
-        'description': 'Försvar, säkerhet - Gripen, radar, ubåtar',
-        'export_pct': 60,
-        'main_markets': ['Sverige', 'Europa', 'Global'],
-    },
-    'ABB': {
-        'name': 'ABB Ltd',
-        'sector': 'Industrials',
-        'inputs': ['copper', 'steel', 'EUR/SEK'],
-        'description': 'Automation, robotik, kraftnät',
-        'export_pct': 95,
-        'main_markets': ['Global'],
-    },
-    'ATCO-A': {
-        'name': 'Atlas Copco A',
-        'sector': 'Industrials',
-        'inputs': ['steel', 'copper', 'EUR/SEK'],
-        'description': 'Kompressorer, vakuumteknik, industriverktyg',
-        'export_pct': 95,
-        'main_markets': ['Global'],
-    },
-    'HEXA-B': {
-        'name': 'Hexagon B',
-        'sector': 'Technology',
-        'inputs': ['semiconductors', 'EUR/SEK'],
-        'description': 'Mätteknik, sensorer, mjukvara för automation',
-        'export_pct': 95,
-        'main_markets': ['Global'],
-    },
-}
-
-# Macro symbol mappings
+# Macro symbol display names
 MACRO_SYMBOLS = {
     'GC=F': {'name': 'Guld', 'type': 'commodity'},
     'SI=F': {'name': 'Silver', 'type': 'commodity'},
     'HG=F': {'name': 'Koppar', 'type': 'commodity'},
     'BZ=F': {'name': 'Brent Olja', 'type': 'commodity'},
+    'NG=F': {'name': 'Naturgas', 'type': 'commodity'},
     'EURSEK=X': {'name': 'EUR/SEK', 'type': 'currency'},
     'USDSEK=X': {'name': 'USD/SEK', 'type': 'currency'},
     '^OMX': {'name': 'OMX Stockholm 30', 'type': 'index'},
@@ -125,19 +27,39 @@ MACRO_SYMBOLS = {
 
 
 class MarketAnalyzer:
-    """Analyzes market conditions and finds opportunities."""
+    """Analyzes market conditions and finds opportunities using company database."""
     
     def __init__(self, db):
         self.db = db
+        self._company_cache = {}
+        self._deps_cache = {}
+        self._load_company_data()
         
-    def get_company_info(self, ticker: str) -> Dict[str, Any]:
-        """Get company information."""
-        return COMPANY_DATA.get(ticker, {})
+    def _load_company_data(self):
+        """Load company data and dependencies from database."""
+        try:
+            companies = self.db.query("SELECT * FROM companies")
+            for c in companies:
+                self._company_cache[c['ticker']] = c
+            
+            deps = self.db.query("SELECT * FROM input_dependencies")
+            for d in deps:
+                ticker = d['ticker']
+                if ticker not in self._deps_cache:
+                    self._deps_cache[ticker] = []
+                self._deps_cache[ticker].append(d)
+            
+            logger.info(f"📊 Loaded {len(self._company_cache)} companies, {len(deps)} input dependencies from DB")
+        except Exception as e:
+            logger.error(f"Error loading company data from DB: {e}")
     
-    def get_company_inputs(self, ticker: str) -> List[str]:
-        """Get what inputs/factors affect a company."""
-        info = self.get_company_info(ticker)
-        return info.get('inputs', [])
+    def get_company_info(self, ticker: str) -> Dict[str, Any]:
+        """Get company information from database cache."""
+        return self._company_cache.get(ticker, {})
+    
+    def get_company_deps(self, ticker: str) -> List[Dict]:
+        """Get input dependencies for a company."""
+        return self._deps_cache.get(ticker, [])
     
     def get_latest_macro(self) -> Dict[str, Dict]:
         """Get latest macro data from database."""
@@ -170,90 +92,76 @@ class MarketAnalyzer:
     def analyze_macro_impact(self, ticker: str) -> Dict[str, Any]:
         """
         Analyze how current macro conditions affect a company.
+        Uses input_dependencies from database with proper impact strength.
         """
-        inputs = self.get_company_inputs(ticker)
+        deps = self.get_company_deps(ticker)
         macro = self.get_latest_macro()
         
         impacts = []
-        net_score = 0
+        weighted_score = 0
+        total_weight = 0
         
-        for input_factor in inputs:
-            impact = self._analyze_input_impact(input_factor, macro)
-            if impact:
-                impacts.append(impact)
-                net_score += impact['score']
+        for dep in deps:
+            symbol = dep.get('macro_symbol')
+            if not symbol or symbol not in macro:
+                continue
+            
+            data = macro[symbol]
+            change_pct = float(data.get('change_pct', 0) or 0)
+            strength = float(dep.get('impact_strength', 0.5))
+            direction = dep.get('impact_direction', 'cost')
+            
+            # Calculate impact score
+            if direction == 'cost':
+                # Rising costs = negative for company
+                score = -change_pct / 10
+                dir_label = 'positive' if change_pct < 0 else 'negative'
+                reason = f"{dep['input_name']} {'ner' if change_pct < 0 else 'upp'} {abs(change_pct):.1f}% — {dep.get('description', '')}"
+            else:  # revenue
+                # Rising revenue drivers = positive
+                score = change_pct / 10
+                dir_label = 'positive' if change_pct > 0 else 'negative'
+                reason = f"{dep['input_name']} {change_pct:+.1f}% — {dep.get('description', '')}"
+            
+            # Weight by impact strength
+            weighted = max(-1, min(1, score)) * strength
+            weighted_score += weighted
+            total_weight += strength
+            
+            impacts.append({
+                'factor': dep['input_name'],
+                'direction': dir_label,
+                'score': max(-1, min(1, score)),
+                'strength': strength,
+                'weighted_score': weighted,
+                'reason': reason,
+                'change_pct': change_pct,
+                'macro_symbol': symbol,
+            })
         
-        # Normalize score to -1 to 1
-        if impacts:
-            net_sentiment = net_score / len(impacts)
-        else:
-            net_sentiment = 0
+        # Normalized sentiment
+        net_sentiment = weighted_score / total_weight if total_weight > 0 else 0
         
         return {
             'ticker': ticker,
-            'inputs': inputs,
+            'dependencies': len(deps),
             'impacts': impacts,
-            'net_sentiment': net_sentiment,
-        }
-    
-    def _analyze_input_impact(self, input_factor: str, macro: Dict) -> Optional[Dict]:
-        """Analyze impact of a single input factor."""
-        # Map input factors to macro symbols
-        input_to_symbol = {
-            'steel': None,  # No direct symbol, use iron + coal
-            'iron': None,
-            'copper': 'HG=F',
-            'oil': 'BZ=F',
-            'EUR/SEK': 'EURSEK=X',
-            'USD/SEK': 'USDSEK=X',
-            'gold': 'GC=F',
-            'energy': 'BZ=F',
-        }
-        
-        symbol = input_to_symbol.get(input_factor)
-        if not symbol or symbol not in macro:
-            return None
-        
-        data = macro[symbol]
-        change_pct = float(data.get('change_pct', 0) or 0)
-        
-        # Determine impact direction
-        # For costs (copper, oil): negative change = positive for company
-        # For export currencies (EUR/SEK): positive change = positive for exporters
-        cost_inputs = ['copper', 'oil', 'energy', 'steel', 'iron']
-        
-        if input_factor in cost_inputs:
-            # Lower costs = good
-            score = -change_pct / 10  # Normalize
-            direction = 'positive' if change_pct < 0 else 'negative'
-            reason = f"{input_factor.title()} {'ner' if change_pct < 0 else 'upp'} {abs(change_pct):.1f}%"
-        else:
-            # Currency - weaker SEK = good for exporters
-            score = change_pct / 10
-            direction = 'positive' if change_pct > 0 else 'negative'
-            reason = f"{input_factor} {'svagare' if change_pct > 0 else 'starkare'} SEK ({change_pct:+.1f}%)"
-        
-        return {
-            'factor': input_factor,
-            'direction': direction,
-            'score': max(-1, min(1, score)),  # Clamp to -1, 1
-            'reason': reason,
-            'change_pct': change_pct,
+            'net_sentiment': max(-1, min(1, net_sentiment)),
         }
     
     def find_opportunities(self) -> List[Dict[str, Any]]:
         """
         Find trading opportunities based on:
-        1. Macro changes that benefit specific companies
+        1. Macro changes weighted by input dependency strength
         2. Price momentum
-        3. Valuation (if available)
+        3. Sector conditions
         """
         opportunities = []
         prices = self.get_latest_prices()
         
         logger.info("🔍 Scanning for opportunities...")
         
-        for ticker, company in COMPANY_DATA.items():
+        for ticker, company in self._company_cache.items():
             # Skip if no price data
             if ticker not in prices:
                 continue
@@ -264,7 +172,7 @@ class MarketAnalyzer:
             if current_price <= 0:
                 continue
             
-            # Analyze macro impact
+            # Analyze macro impact using DB dependencies
             analysis = self.analyze_macro_impact(ticker)
             
             # Calculate opportunity score
@@ -272,10 +180,11 @@ class MarketAnalyzer:
                 ticker, company, analysis, price_data
             )
             
-            if score['total'] >= 50:  # Minimum threshold
+            if score['total'] >= 50:
                 opp = {
                     'ticker': ticker,
-                    'name': company['name'],
+                    'name': company.get('name', ticker),
+                    'sector': company.get('sector', ''),
                     'current_price': current_price,
                     'confidence': score['total'],
                     'thesis': self._generate_thesis(ticker, company, analysis, score),
@@ -287,40 +196,44 @@ class MarketAnalyzer:
                 opportunities.append(opp)
                 logger.info(f"  📊 {ticker}: {score['total']:.0f}% confidence")
         
-        # Sort by confidence
         opportunities.sort(key=lambda x: x['confidence'], reverse=True)
-        
         logger.info(f"✅ Found {len(opportunities)} opportunities")
         return opportunities
     
     def _calculate_opportunity_score(
-        self, 
-        ticker: str, 
-        company: Dict, 
-        analysis: Dict,
-        price_data: Dict
+        self, ticker: str, company: Dict, analysis: Dict, price_data: Dict
     ) -> Dict[str, float]:
-        """Calculate composite opportunity score."""
+        """Calculate composite opportunity score with weighted dependencies."""
         
-        # Macro score (0-40 points)
-        macro_score = (analysis['net_sentiment'] + 1) * 20  # -1 to 1 -> 0 to 40
+        # Macro score (0-40 points) — weighted by dependency strength
+        macro_score = (analysis['net_sentiment'] + 1) * 20  # -1..1 → 0..40
         
-        # Momentum score (0-30 points) - based on recent price action
+        # Bonus for strong impacts (many aligned factors)
+        strong_positive = sum(1 for i in analysis['impacts'] 
+                           if i['direction'] == 'positive' and i['strength'] >= 0.6)
+        macro_score = min(40, macro_score + strong_positive * 3)
+        
+        # Momentum score (0-30 points)
         price_change = float(price_data.get('change_pct', 0) or 0)
         if price_change > 0:
-            momentum_score = min(30, price_change * 5)  # Positive momentum
+            momentum_score = min(30, price_change * 5)
         else:
-            momentum_score = max(0, 15 + price_change * 2)  # Some points for stability
+            momentum_score = max(0, 15 + price_change * 2)
         
-        # Sector score (0-30 points) - hardcoded for now based on current conditions
+        # Sector score (0-30 points)
+        sector = company.get('sector', '')
         sector_scores = {
-            'Industrials': 25,  # Strong global demand
-            'Basic Materials': 20,  # Commodity volatility
+            'Industrials': 25,
+            'Basic Materials': 20,
             'Technology': 22,
             'Consumer Cyclical': 15,
             'Consumer Defensive': 18,
+            'Financial Services': 20,
+            'Healthcare': 22,
+            'Communication Services': 16,
+            'Real Estate': 14,
         }
-        sector_score = sector_scores.get(company.get('sector', ''), 15)
+        sector_score = sector_scores.get(sector, 15)
         
         total = macro_score + momentum_score + sector_score
         
@@ -331,34 +244,30 @@ class MarketAnalyzer:
             'sector': sector_score,
         }
     
-    def _generate_thesis(
-        self, 
-        ticker: str, 
-        company: Dict, 
-        analysis: Dict,
-        score: Dict
-    ) -> str:
-        """Generate investment thesis."""
+    def _generate_thesis(self, ticker: str, company: Dict, analysis: Dict, score: Dict) -> str:
+        """Generate investment thesis from DB data."""
         parts = []
         
-        # Company context
-        parts.append(f"{company['name']}: {company['description']}.")
+        name = company.get('name', ticker)
+        desc = company.get('description', '')
+        if desc:
+            parts.append(f"{name}: {desc}.")
+        else:
+            parts.append(f"{name}.")
         
-        # Macro impacts
         positive_impacts = [i for i in analysis['impacts'] if i['direction'] == 'positive']
         negative_impacts = [i for i in analysis['impacts'] if i['direction'] == 'negative']
         
         if positive_impacts:
+            # Sort by weighted score
+            positive_impacts.sort(key=lambda x: abs(x['weighted_score']), reverse=True)
             reasons = [i['reason'] for i in positive_impacts[:2]]
-            parts.append(f"Positivt: {', '.join(reasons)}.")
+            parts.append(f"Positivt: {'; '.join(reasons)}.")
         
         if negative_impacts:
+            negative_impacts.sort(key=lambda x: abs(x['weighted_score']), reverse=True)
             reasons = [i['reason'] for i in negative_impacts[:1]]
-            parts.append(f"Risk: {', '.join(reasons)}.")
-        
-        # Export exposure
-        if company.get('export_pct', 0) > 80:
-            parts.append(f"Hög exportandel ({company['export_pct']}%) ger valutaexponering.")
+            parts.append(f"Risk: {'; '.join(reasons)}.")
         
         return ' '.join(parts)
     
@@ -378,9 +287,8 @@ class MarketAnalyzer:
         opportunities = self.find_opportunities()
         updated = 0
         
-        for opp in opportunities[:10]:  # Top 10
+        for opp in opportunities[:10]:
             try:
-                # Upsert prospect
                 self.db.execute("""
                     INSERT INTO prospects (ticker, name, thesis, confidence, entry_trigger, priority, current_price, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
@@ -396,7 +304,7 @@ class MarketAnalyzer:
                     opp['thesis'],
                     opp['confidence'],
                     opp['entry_trigger'],
-                    opportunities.index(opp) + 1,  # Priority based on rank
+                    opportunities.index(opp) + 1,
                     opp['current_price'],
                 ))
                 updated += 1
@@ -435,13 +343,9 @@ class MarketAnalyzer:
     def analyze_day(self) -> Dict[str, Any]:
         """End of day analysis."""
         logger.info("🌆 Running end of day analysis...")
-        
-        # Update prospects
         self.update_prospects()
         
-        # Calculate daily stats
         prices = self.get_latest_prices()
-        
         gainers = []
         losers = []
         
@@ -461,3 +365,35 @@ class MarketAnalyzer:
             'top_losers': losers[:5],
             'opportunities_found': len(self.find_opportunities()),
         }
+    
+    def get_sector_overview(self) -> Dict[str, Dict]:
+        """Get overview by sector from database."""
+        try:
+            sectors = self.db.query("""
+                SELECT sector, COUNT(*) as count, 
+                       array_agg(ticker) as tickers
+                FROM companies
+                WHERE sector IS NOT NULL
+                GROUP BY sector
+                ORDER BY count DESC
+            """)
+            return {s['sector']: s for s in sectors}
+        except Exception as e:
+            logger.error(f"Error getting sector overview: {e}")
+            return {}
+    
+    def get_macro_impact_report(self, macro_symbol: str) -> List[Dict]:
+        """Show which companies are affected by a specific macro factor."""
+        try:
+            results = self.db.query("""
+                SELECT d.ticker, c.name, c.sector, d.input_name,
+                       d.impact_direction, d.impact_strength, d.description
+                FROM input_dependencies d
+                JOIN companies c ON c.ticker = d.ticker
+                WHERE d.macro_symbol = :symbol
+                ORDER BY d.impact_strength DESC
+            """, {'symbol': macro_symbol})
+            return results
+        except Exception as e:
+            logger.error(f"Error getting macro impact report: {e}")
+            return []

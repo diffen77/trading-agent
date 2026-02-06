@@ -52,11 +52,43 @@ COMPANY_NAMES = {
     'ssab': 'SSAB-A',
     'boliden': 'BOL',
     'telia': 'TELIA',
+    'tele2': 'TEL2-B',
     'swedbank': 'SWED-A',
     'seb': 'SEB-A',
+    'handelsbanken': 'SHB-A',
     'nordea': 'NDA-SE',
     'investor': 'INVE-B',
+    'kinnevik': 'KINV-B',
     'astrazeneca': 'AZN',
+    'essity': 'ESSITY-B',
+    'getinge': 'GETI-B',
+    'alfa laval': 'ALFA',
+    'assa abloy': 'ASSA-B',
+    'electrolux': 'ELUX-B',
+    'husqvarna': 'HUSQ-B',
+    'nibe': 'NIBE-B',
+    'evolution': 'EVO',
+    'skanska': 'SKA-B',
+    'securitas': 'SECU-B',
+    'castellum': 'CAST',
+    'balder': 'BALD-B',
+    'fabege': 'FABG',
+    'hufvudstaden': 'HUFV-A',
+    'latour': 'LATO-B',
+    'lundberg': 'LUND-B',
+    'sca': 'SCA-B',
+    'billerud': 'BILL',
+    'trelleborg': 'TREL-B',
+    'thule': 'THULE',
+    'mips': 'MIPS',
+    'sinch': 'SINCH',
+    'peab': 'PEAB-B',
+    'ica': 'ICA',
+    'addtech': 'ADDT-B',
+    'clas ohlson': 'CLAS-B',
+    'diös': 'DIOS',
+    'sagax': 'SAGA-B',
+    'wihlborg': 'WIHL',
 }
 
 
@@ -65,6 +97,24 @@ class NewsFetcher:
     
     def __init__(self, db):
         self.db = db
+        self._load_company_names_from_db()
+    
+    def _load_company_names_from_db(self):
+        """Augment COMPANY_NAMES with names from database."""
+        global COMPANY_NAMES
+        try:
+            companies = self.db.query("SELECT ticker, name FROM companies")
+            for c in companies:
+                # Add lowercase name → ticker mapping
+                name = c['name'].lower()
+                if name not in COMPANY_NAMES:
+                    COMPANY_NAMES[name] = c['ticker']
+                # Also add first word (e.g. "Volvo" from "Volvo B")
+                first_word = name.split()[0] if name else ''
+                if len(first_word) > 3 and first_word not in COMPANY_NAMES:
+                    COMPANY_NAMES[first_word] = c['ticker']
+        except Exception as e:
+            logger.warning(f"Could not load company names from DB: {e}")
     
     def fetch_all_news(self) -> List[Dict]:
         """Fetch news from all sources."""

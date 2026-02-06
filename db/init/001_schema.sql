@@ -132,8 +132,39 @@ CREATE TABLE balance (
 -- Initialize with starting capital
 INSERT INTO balance (cash, total_value) VALUES (20000.00, 20000.00);
 
+-- Input dependencies (what macro factors affect each company)
+CREATE TABLE input_dependencies (
+    id SERIAL PRIMARY KEY,
+    ticker VARCHAR(20) NOT NULL REFERENCES companies(ticker),
+    input_name VARCHAR(100) NOT NULL,
+    macro_symbol VARCHAR(50),
+    impact_direction VARCHAR(10) NOT NULL DEFAULT 'cost',
+    impact_strength DECIMAL(3,2) NOT NULL DEFAULT 0.5,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(ticker, input_name)
+);
+
+-- Trade outcome tracking (learning loop)
+CREATE TABLE trade_outcomes (
+    id SERIAL PRIMARY KEY,
+    trade_id INTEGER NOT NULL REFERENCES trades(id),
+    check_date DATE NOT NULL,
+    days_since_entry INTEGER NOT NULL,
+    price_at_check DECIMAL(12, 4),
+    pnl_pct DECIMAL(8, 4),
+    pnl_amount DECIMAL(12, 2),
+    hypothesis_correct BOOLEAN,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(trade_id, check_date)
+);
+
 -- Indexes
 CREATE INDEX idx_prices_ticker_date ON prices(ticker, date DESC);
+CREATE INDEX idx_input_deps_ticker ON input_dependencies(ticker);
+CREATE INDEX idx_input_deps_symbol ON input_dependencies(macro_symbol);
+CREATE INDEX idx_trade_outcomes_trade ON trade_outcomes(trade_id);
 CREATE INDEX idx_trades_ticker ON trades(ticker);
 CREATE INDEX idx_trades_executed_at ON trades(executed_at DESC);
 CREATE INDEX idx_macro_symbol_date ON macro(symbol, date DESC);
