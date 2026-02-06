@@ -79,34 +79,33 @@ def main():
 
 def run_daemon(yahoo, db, analyzer, trader):
     """Run as a long-lived daemon with scheduled routines."""
-    logger.info("🔄 Running in daemon mode — checking every 5 minutes")
+    logger.info("🔄 Running in daemon mode — checking every 10 minutes")
     
-    last_run_hour = -1
+    last_scheduled_hour = -1
     
     while True:
         try:
             now = datetime.utcnow()
             current_hour = now.hour
             
-            # Run scheduled routine once per hour
-            if current_hour != last_run_hour:
-                if current_hour in SCHEDULE_UTC:
-                    mode = SCHEDULE_UTC[current_hour]
-                    logger.info(f"⏰ Scheduled run: {mode} (UTC {current_hour}:00)")
-                    run_mode(mode, yahoo, db, analyzer, trader)
-                else:
-                    # Off-schedule: just update prices during market hours (07-17 UTC)
-                    if 7 <= current_hour <= 17:
-                        logger.info(f"📊 Hourly price update (UTC {current_hour}:00)")
-                        yahoo.update_all_prices(db)
-                        db.save_portfolio_snapshot()
-                    else:
-                        logger.debug(f"💤 Outside market hours (UTC {current_hour}:00)")
-                
-                last_run_hour = current_hour
+            # Run scheduled routines once per hour (at the right hours)
+            if current_hour != last_scheduled_hour and current_hour in SCHEDULE_UTC:
+                mode = SCHEDULE_UTC[current_hour]
+                logger.info(f"⏰ Scheduled run: {mode} (UTC {current_hour}:00)")
+                run_mode(mode, yahoo, db, analyzer, trader)
+                last_scheduled_hour = current_hour
             
-            # Sleep 5 minutes between checks
-            time.sleep(300)
+            # Every 10 min during market hours: update prices + check stop-loss
+            elif 7 <= current_hour <= 17:
+                logger.info(f"📊 Price update + position check (UTC {now.strftime('%H:%M')})")
+                yahoo.update_all_prices(db)
+                trader.check_positions()
+                db.save_portfolio_snapshot()
+            else:
+                logger.debug(f"💤 Outside market hours (UTC {current_hour}:00)")
+            
+            # Sleep 10 minutes between checks
+            time.sleep(600)
             
         except KeyboardInterrupt:
             logger.info("🛑 Agent shutting down...")
