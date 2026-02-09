@@ -382,6 +382,156 @@ class MarketAnalyzer:
             logger.error(f"Error getting sector overview: {e}")
             return {}
     
+    def run_technical_analysis(self) -> List[Dict[str, Any]]:
+        """
+        Calculate RSI(14), SMA20, SMA50, volume ratio, and momentum score
+        for all tracked companies. Saves to technical_signals table.
+        Returns list of signals with alerts.
+        """
+        logger.info("📈 Running technical analysis...")
+        alerts = []
+        
+        for ticker in self._company_cache:
+            try:
+                # Get last 60 days of price data
+                rows = self.db.query("""
+                    SELECT date, close, volume FROM prices
+                    WHERE ticker = :ticker
+                    ORDER BY date DESC
+                    LIMIT 60
+                """, {'ticker': ticker})
+                
+                if len(rows) < 20:
+                    continue
+                
+                # Reverse to chronological order
+                rows = list(reversed(rows))
+                closes = [float(r['close']) for r in rows]
+                volumes = [int(r['volume'] or 0) for r in rows]
+                latest_date = rows[-1]['date']
+                
+                # RSI (14)
+                rsi = self._calc_rsi(closes, 14)
+                
+                # SMA 20 and SMA 50
+                sma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
+                sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else None
+                
+                # Volume ratio vs 20-day average
+                if len(volumes) >= 20:
+                    avg_vol = sum(volumes[-20:]) / 20
+                    volume_ratio = volumes[-1] / avg_vol if avg_vol > 0 else 1.0
+                else:
+                    volume_ratio = 1.0
+                
+                # Momentum score (-100 to +100)
+                momentum = self._calc_momentum(closes, rsi, sma20, sma50, volume_ratio)
+                
+                # Save to DB
+                self.db.execute("""
+                    INSERT INTO technical_signals (ticker, date, rsi, sma20, sma50, volume_ratio, momentum_score)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker, date) DO UPDATE SET
+                        rsi = EXCLUDED.rsi,
+                        sma20 = EXCLUDED.sma20,
+                        sma50 = EXCLUDED.sma50,
+                        volume_ratio = EXCLUDED.volume_ratio,
+                        momentum_score = EXCLUDED.momentum_score
+                """, (ticker, latest_date, rsi, sma20, sma50, volume_ratio, momentum))
+                
+                # Generate alerts
+                if rsi is not None:
+                    if rsi > 70:
+                        alerts.append({'ticker': ticker, 'type': 'overbought', 'rsi': rsi, 'momentum': momentum})
+                        logger.warning(f"⚠️ {ticker} RSI={rsi:.1f} ÖVERKÖPT")
+                    elif rsi < 30:
+                        alerts.append({'ticker': ticker, 'type': 'oversold', 'rsi': rsi, 'momentum': momentum})
+                        logger.warning(f"⚠️ {ticker} RSI={rsi:.1f} ÖVERSÅLT")
+                
+            except Exception as e:
+                logger.error(f"Technical analysis error for {ticker}: {e}")
+        
+        logger.info(f"📈 Technical analysis complete. {len(alerts)} alerts.")
+        return alerts
+    
+    def _calc_rsi(self, closes: List[float], period: int = 14) -> Optional[float]:
+        """Calculate RSI."""
+        if len(closes) < period + 1:
+            return None
+        
+        deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+        recent = deltas[-(period):]
+        
+        gains = [d for d in recent if d > 0]
+        losses = [-d for d in recent if d < 0]
+        
+        avg_gain = sum(gains) / period if gains else 0
+        avg_loss = sum(losses) / period if losses else 0
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+    
+    def _calc_momentum(self, closes: List[float], rsi: Optional[float],
+                       sma20: Optional[float], sma50: Optional[float],
+                       volume_ratio: float) -> float:
+        """Calculate momentum score from -100 to +100."""
+        score = 0
+        components = 0
+        
+        # RSI component: 30-70 neutral, outside = signal
+        if rsi is not None:
+            if rsi > 50:
+                score += min(30, (rsi - 50) * 1.5)
+            else:
+                score -= min(30, (50 - rsi) * 1.5)
+            components += 1
+        
+        # Price vs SMA20: above = bullish
+        current = closes[-1]
+        if sma20 is not None and sma20 > 0:
+            pct_above = ((current - sma20) / sma20) * 100
+            score += max(-30, min(30, pct_above * 5))
+            components += 1
+        
+        # SMA20 vs SMA50: golden/death cross signal
+        if sma20 is not None and sma50 is not None and sma50 > 0:
+            cross_pct = ((sma20 - sma50) / sma50) * 100
+            score += max(-20, min(20, cross_pct * 5))
+            components += 1
+        
+        # Volume: high volume confirms trend
+        if volume_ratio > 1.5:
+            # Amplify current direction
+            direction = 1 if score > 0 else -1
+            score += direction * min(20, (volume_ratio - 1) * 10)
+            components += 1
+        
+        return max(-100, min(100, score))
+    
+    def get_technical_signals(self, ticker: str) -> Optional[Dict]:
+        """Get latest technical signals for a ticker."""
+        rows = self.db.query("""
+            SELECT * FROM technical_signals
+            WHERE ticker = :ticker
+            ORDER BY date DESC LIMIT 1
+        """, {'ticker': ticker})
+        return rows[0] if rows else None
+    
+    def get_rsi_alerts(self) -> List[Dict]:
+        """Get current RSI alerts for portfolio positions."""
+        return self.db.query("""
+            SELECT ts.ticker, ts.date, ts.rsi, ts.momentum_score,
+                   p.shares, p.avg_price
+            FROM technical_signals ts
+            JOIN portfolio p ON p.ticker = ts.ticker
+            WHERE ts.date = (SELECT MAX(date) FROM technical_signals WHERE ticker = ts.ticker)
+            AND (ts.rsi > 70 OR ts.rsi < 30)
+            AND p.shares > 0
+        """)
+    
     def get_macro_impact_report(self, macro_symbol: str) -> List[Dict]:
         """Show which companies are affected by a specific macro factor."""
         try:

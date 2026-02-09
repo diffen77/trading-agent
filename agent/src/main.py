@@ -31,6 +31,7 @@ from datetime import datetime
 from .data.yahoo import YahooDataFetcher
 from .data.database import Database
 from .data.news import NewsFetcher
+from .data.reports import ReportTracker
 from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
 
@@ -95,10 +96,27 @@ def run_daemon(yahoo, db, analyzer, trader):
                 run_mode(mode, yahoo, db, analyzer, trader)
                 last_scheduled_hour = current_hour
             
-            # Every 10 min during market hours: update prices + check stop-loss
+            # Every 10 min during market hours: update prices + technical + news
             elif 7 <= current_hour <= 17:
-                logger.info(f"📊 Price update + position check (UTC {now.strftime('%H:%M')})")
+                logger.info(f"📊 Price update + analysis (UTC {now.strftime('%H:%M')})")
                 yahoo.update_all_prices(db)
+                
+                # Technical analysis after price update
+                try:
+                    ta_alerts = analyzer.run_technical_analysis()
+                    if ta_alerts:
+                        for alert in ta_alerts:
+                            logger.warning(f"🔔 TA Alert: {alert['ticker']} - {alert['type']} (RSI={alert['rsi']:.1f})")
+                except Exception as e:
+                    logger.error(f"Technical analysis error: {e}")
+                
+                # News update
+                try:
+                    news_fetcher = NewsFetcher(db)
+                    news_fetcher.update_news()
+                except Exception as e:
+                    logger.error(f"News update error: {e}")
+                
                 trader.check_positions()
                 db.save_portfolio_snapshot()
             else:
@@ -191,6 +209,24 @@ def run_morning_routine(yahoo, db, analyzer):
     except Exception as e:
         logger.warning(f"News fetch failed: {e}")
         news_briefing = "Nyheter ej tillgängliga"
+    
+    # Technical analysis
+    logger.info("📈 Running technical analysis...")
+    try:
+        ta_alerts = analyzer.run_technical_analysis()
+        if ta_alerts:
+            for alert in ta_alerts:
+                logger.warning(f"🔔 TA Alert: {alert['ticker']} - {alert['type']} (RSI={alert['rsi']:.1f})")
+    except Exception as e:
+        logger.warning(f"Technical analysis failed: {e}")
+    
+    # Update report calendar
+    logger.info("📅 Updating report calendar...")
+    try:
+        report_tracker = ReportTracker(db)
+        report_tracker.update_report_calendar()
+    except Exception as e:
+        logger.warning(f"Report calendar update failed: {e}")
     
     # Generate morning briefing
     briefing = analyzer.generate_morning_briefing()
