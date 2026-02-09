@@ -28,6 +28,12 @@ interface Trade {
   hypothesis: string
   executed_at: string
   pnl?: number
+  target_pct?: number
+  stop_loss_pct?: number
+  target_level?: number
+  stop_loss_level?: number
+  closed_at?: string
+  outcome?: string
 }
 
 interface Stock {
@@ -428,11 +434,28 @@ function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number
             <strong>Hypotes:</strong> {trade.hypothesis}
           </div>
         )}
-        {confidence && (
-          <div className="inline-block mt-2 px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-400">
-            Confidence: {confidence.toFixed(0)}%
-          </div>
-        )}
+        <div className="flex items-center gap-3 mt-3">
+          {confidence && (
+            <span className="px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-400">
+              Confidence: {confidence.toFixed(0)}%
+            </span>
+          )}
+          {trade.stop_loss_level && (
+            <span className="px-2 py-0.5 bg-red-900/50 rounded text-xs text-red-400">
+              Stop-loss: {parseFloat(String(trade.stop_loss_level)).toFixed(2)} ({trade.stop_loss_pct}%)
+            </span>
+          )}
+          {trade.target_level && (
+            <span className="px-2 py-0.5 bg-green-900/50 rounded text-xs text-green-400">
+              Target: {parseFloat(String(trade.target_level)).toFixed(2)} ({trade.target_pct && '+' + trade.target_pct}%)
+            </span>
+          )}
+          {trade.closed_at && (
+            <span className="px-2 py-0.5 bg-yellow-900/50 rounded text-xs text-yellow-400">
+              Stängd: {new Date(trade.closed_at).toLocaleDateString('sv-SE')}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   )
