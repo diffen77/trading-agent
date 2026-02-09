@@ -175,9 +175,12 @@ class MarketAnalyzer:
             # Analyze macro impact using DB dependencies
             analysis = self.analyze_macro_impact(ticker)
             
+            # Get technical signals
+            tech = self.get_technical_signals(ticker)
+            
             # Calculate opportunity score
             score = self._calculate_opportunity_score(
-                ticker, company, analysis, price_data
+                ticker, company, analysis, price_data, tech
             )
             
             if score['total'] >= 50:
@@ -192,6 +195,8 @@ class MarketAnalyzer:
                     'macro_sentiment': analysis['net_sentiment'],
                     'impacts': analysis['impacts'],
                     'score_breakdown': score,
+                    'pattern': tech.get('pattern') if tech else None,
+                    'pattern_signal': tech.get('pattern_signal') if tech else None,
                 }
                 opportunities.append(opp)
                 logger.info(f"  📊 {ticker}: {score['total']:.0f}% confidence")
@@ -201,47 +206,85 @@ class MarketAnalyzer:
         return opportunities
     
     def _calculate_opportunity_score(
-        self, ticker: str, company: Dict, analysis: Dict, price_data: Dict
+        self, ticker: str, company: Dict, analysis: Dict, price_data: Dict,
+        tech: Optional[Dict] = None
     ) -> Dict[str, float]:
-        """Calculate composite opportunity score with weighted dependencies."""
+        """Calculate composite opportunity score with weighted dependencies and technicals."""
         
-        # Macro score (0-40 points) — weighted by dependency strength
-        macro_score = (analysis['net_sentiment'] + 1) * 20  # -1..1 → 0..40
+        # Macro score (0-35 points) — weighted by dependency strength
+        macro_score = (analysis['net_sentiment'] + 1) * 17.5  # -1..1 → 0..35
         
         # Bonus for strong impacts (many aligned factors)
         strong_positive = sum(1 for i in analysis['impacts'] 
                            if i['direction'] == 'positive' and i['strength'] >= 0.6)
-        macro_score = min(40, macro_score + strong_positive * 3)
+        macro_score = min(35, macro_score + strong_positive * 3)
         
-        # Momentum score (0-30 points)
+        # Momentum score (0-25 points)
         price_change = float(price_data.get('change_pct', 0) or 0)
         if price_change > 0:
-            momentum_score = min(30, price_change * 5)
+            momentum_score = min(25, price_change * 5)
         else:
-            momentum_score = max(0, 15 + price_change * 2)
+            momentum_score = max(0, 12 + price_change * 2)
         
-        # Sector score (0-30 points)
+        # Sector score (0-20 points)
         sector = company.get('sector', '')
         sector_scores = {
-            'Industrials': 25,
-            'Basic Materials': 20,
-            'Technology': 22,
-            'Consumer Cyclical': 15,
-            'Consumer Defensive': 18,
-            'Financial Services': 20,
-            'Healthcare': 22,
-            'Communication Services': 16,
-            'Real Estate': 14,
+            'Industrials': 18,
+            'Basic Materials': 15,
+            'Technology': 17,
+            'Consumer Cyclical': 12,
+            'Consumer Defensive': 14,
+            'Financial Services': 15,
+            'Healthcare': 17,
+            'Communication Services': 12,
+            'Real Estate': 10,
         }
-        sector_score = sector_scores.get(sector, 15)
+        sector_score = sector_scores.get(sector, 12)
         
-        total = macro_score + momentum_score + sector_score
+        # Technical/pattern score (0-20 points)
+        technical_score = 10  # Neutral baseline
+        pattern_name = None
+        if tech:
+            # RSI contribution
+            rsi = float(tech.get('rsi') or 50)
+            if 40 <= rsi <= 60:
+                technical_score += 2  # Neutral RSI = slight positive (room to run)
+            elif rsi < 35:
+                technical_score += 5  # Oversold = opportunity
+            elif rsi > 65:
+                technical_score -= 3  # Overbought = caution
+            
+            # Momentum score from TA
+            ta_momentum = float(tech.get('momentum_score') or 0)
+            technical_score += max(-5, min(5, ta_momentum / 20))
+            
+            # Pattern bonus/penalty
+            pattern_name = tech.get('pattern')
+            pattern_signal = tech.get('pattern_signal')
+            if pattern_signal == 'bullish':
+                pattern_bonus = {
+                    'golden_cross': 8, 'breakout': 7, 'rsi_bull_divergence': 6,
+                    'volume_spike_up': 5, 'support_bounce': 4,
+                }.get(pattern_name, 4)
+                technical_score += pattern_bonus
+            elif pattern_signal == 'bearish':
+                pattern_penalty = {
+                    'death_cross': -8, 'breakdown': -7, 'rsi_bear_divergence': -6,
+                    'volume_spike_down': -5, 'resistance_rejection': -4,
+                }.get(pattern_name, -4)
+                technical_score += pattern_penalty
+        
+        technical_score = max(0, min(20, technical_score))
+        
+        total = macro_score + momentum_score + sector_score + technical_score
         
         return {
             'total': min(100, total),
             'macro': macro_score,
             'momentum': momentum_score,
             'sector': sector_score,
+            'technical': technical_score,
+            'pattern': pattern_name,
         }
     
     def _generate_thesis(self, ticker: str, company: Dict, analysis: Dict, score: Dict) -> str:
@@ -268,6 +311,23 @@ class MarketAnalyzer:
             negative_impacts.sort(key=lambda x: abs(x['weighted_score']), reverse=True)
             reasons = [i['reason'] for i in negative_impacts[:1]]
             parts.append(f"Risk: {'; '.join(reasons)}.")
+        
+        # Pattern info
+        pattern = score.get('pattern')
+        if pattern:
+            pattern_labels = {
+                'golden_cross': 'Golden Cross (SMA20>SMA50)',
+                'death_cross': 'Death Cross (SMA20<SMA50)',
+                'breakout': 'Breakout över 20d-high',
+                'breakdown': 'Breakdown under 20d-low',
+                'rsi_bull_divergence': 'RSI bullish divergens',
+                'rsi_bear_divergence': 'RSI bearish divergens',
+                'volume_spike_up': 'Volymspike uppåt',
+                'volume_spike_down': 'Volymspike nedåt',
+                'support_bounce': 'Studs från stöd',
+                'resistance_rejection': 'Avvisad vid motstånd',
+            }
+            parts.append(f"Tekniskt: {pattern_labels.get(pattern, pattern)}.")
         
         return ' '.join(parts)
     
@@ -384,9 +444,9 @@ class MarketAnalyzer:
     
     def run_technical_analysis(self) -> List[Dict[str, Any]]:
         """
-        Calculate RSI(14), SMA20, SMA50, volume ratio, and momentum score
-        for all tracked companies. Saves to technical_signals table.
-        Returns list of signals with alerts.
+        Calculate RSI(14), SMA20, SMA50, volume ratio, momentum score,
+        and pattern recognition for all tracked companies.
+        Saves to technical_signals table. Returns list of alerts.
         """
         logger.info("📈 Running technical analysis...")
         alerts = []
@@ -395,7 +455,7 @@ class MarketAnalyzer:
             try:
                 # Get last 60 days of price data
                 rows = self.db.query("""
-                    SELECT date, close, volume FROM prices
+                    SELECT date, open, high, low, close, volume FROM prices
                     WHERE ticker = :ticker
                     ORDER BY date DESC
                     LIMIT 60
@@ -407,6 +467,8 @@ class MarketAnalyzer:
                 # Reverse to chronological order
                 rows = list(reversed(rows))
                 closes = [float(r['close']) for r in rows]
+                highs = [float(r['high'] or r['close']) for r in rows]
+                lows = [float(r['low'] or r['close']) for r in rows]
                 volumes = [int(r['volume'] or 0) for r in rows]
                 latest_date = rows[-1]['date']
                 
@@ -416,6 +478,10 @@ class MarketAnalyzer:
                 # SMA 20 and SMA 50
                 sma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
                 sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else None
+                
+                # Previous day SMAs (for crossover detection)
+                prev_sma20 = sum(closes[-21:-1]) / 20 if len(closes) >= 21 else None
+                prev_sma50 = sum(closes[-51:-1]) / 50 if len(closes) >= 51 else None
                 
                 # Volume ratio vs 20-day average
                 if len(volumes) >= 20:
@@ -427,25 +493,41 @@ class MarketAnalyzer:
                 # Momentum score (-100 to +100)
                 momentum = self._calc_momentum(closes, rsi, sma20, sma50, volume_ratio)
                 
+                # Pattern recognition
+                pattern, pattern_signal = self._detect_patterns(
+                    closes, highs, lows, volumes, rsi,
+                    sma20, sma50, prev_sma20, prev_sma50, volume_ratio
+                )
+                
                 # Save to DB
                 self.db.execute("""
-                    INSERT INTO technical_signals (ticker, date, rsi, sma20, sma50, volume_ratio, momentum_score)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO technical_signals (ticker, date, rsi, sma20, sma50, volume_ratio, momentum_score, pattern, pattern_signal)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (ticker, date) DO UPDATE SET
                         rsi = EXCLUDED.rsi,
                         sma20 = EXCLUDED.sma20,
                         sma50 = EXCLUDED.sma50,
                         volume_ratio = EXCLUDED.volume_ratio,
-                        momentum_score = EXCLUDED.momentum_score
-                """, (ticker, latest_date, rsi, sma20, sma50, volume_ratio, momentum))
+                        momentum_score = EXCLUDED.momentum_score,
+                        pattern = EXCLUDED.pattern,
+                        pattern_signal = EXCLUDED.pattern_signal
+                """, (ticker, latest_date, rsi, sma20, sma50, volume_ratio, momentum, pattern, pattern_signal))
                 
                 # Generate alerts
+                if pattern:
+                    alerts.append({
+                        'ticker': ticker, 'type': f'pattern:{pattern}',
+                        'signal': pattern_signal, 'rsi': rsi or 50, 'momentum': momentum
+                    })
+                    emoji = '🟢' if pattern_signal == 'bullish' else '🔴' if pattern_signal == 'bearish' else '⚪'
+                    logger.warning(f"{emoji} {ticker} mönster: {pattern} ({pattern_signal})")
+                
                 if rsi is not None:
                     if rsi > 70:
-                        alerts.append({'ticker': ticker, 'type': 'overbought', 'rsi': rsi, 'momentum': momentum})
+                        alerts.append({'ticker': ticker, 'type': 'overbought', 'signal': 'bearish', 'rsi': rsi, 'momentum': momentum})
                         logger.warning(f"⚠️ {ticker} RSI={rsi:.1f} ÖVERKÖPT")
                     elif rsi < 30:
-                        alerts.append({'ticker': ticker, 'type': 'oversold', 'rsi': rsi, 'momentum': momentum})
+                        alerts.append({'ticker': ticker, 'type': 'oversold', 'signal': 'bullish', 'rsi': rsi, 'momentum': momentum})
                         logger.warning(f"⚠️ {ticker} RSI={rsi:.1f} ÖVERSÅLT")
                 
             except Exception as e:
@@ -453,6 +535,122 @@ class MarketAnalyzer:
         
         logger.info(f"📈 Technical analysis complete. {len(alerts)} alerts.")
         return alerts
+    
+    def _detect_patterns(self, closes, highs, lows, volumes, rsi,
+                         sma20, sma50, prev_sma20, prev_sma50, volume_ratio) -> tuple:
+        """
+        Detect chart patterns. Returns (pattern_name, signal) or (None, None).
+        Only returns the strongest/most significant pattern found.
+        """
+        patterns = []  # (name, signal, priority)
+        
+        current = closes[-1]
+        
+        # 1. Golden Cross / Death Cross (SMA20 crosses SMA50)
+        if sma20 is not None and sma50 is not None and prev_sma20 is not None and prev_sma50 is not None:
+            if prev_sma20 <= prev_sma50 and sma20 > sma50:
+                patterns.append(('golden_cross', 'bullish', 10))
+            elif prev_sma20 >= prev_sma50 and sma20 < sma50:
+                patterns.append(('death_cross', 'bearish', 10))
+        
+        # 2. RSI Bullish Divergence (price makes lower low, RSI makes higher low)
+        if rsi is not None and len(closes) >= 30:
+            rsi_divergence = self._check_rsi_divergence(closes, 14)
+            if rsi_divergence == 'bullish':
+                patterns.append(('rsi_bull_divergence', 'bullish', 8))
+            elif rsi_divergence == 'bearish':
+                patterns.append(('rsi_bear_divergence', 'bearish', 8))
+        
+        # 3. Breakout: price breaks 20-day high with volume confirmation
+        if len(highs) >= 21:
+            high_20d = max(highs[-21:-1])  # Previous 20 days high (excluding today)
+            low_20d = min(lows[-21:-1])
+            
+            if current > high_20d and volume_ratio > 1.3:
+                patterns.append(('breakout', 'bullish', 9))
+            elif current < low_20d and volume_ratio > 1.3:
+                patterns.append(('breakdown', 'bearish', 9))
+        
+        # 4. Volume spike (>2x normal) confirming direction
+        if volume_ratio > 2.0 and len(closes) >= 2:
+            price_change_pct = (closes[-1] - closes[-2]) / closes[-2] * 100
+            if price_change_pct > 1.0:
+                patterns.append(('volume_spike_up', 'bullish', 7))
+            elif price_change_pct < -1.0:
+                patterns.append(('volume_spike_down', 'bearish', 7))
+        
+        # 5. Support/Resistance bounce
+        if len(highs) >= 30:
+            support, resistance = self._calc_support_resistance(highs[-30:], lows[-30:])
+            if support is not None and resistance is not None:
+                range_size = resistance - support
+                if range_size > 0:
+                    # Near support (within 2% of support)
+                    if current <= support * 1.02 and closes[-1] > closes[-2]:
+                        patterns.append(('support_bounce', 'bullish', 6))
+                    # Near resistance (within 2% of resistance)
+                    elif current >= resistance * 0.98 and closes[-1] < closes[-2]:
+                        patterns.append(('resistance_rejection', 'bearish', 6))
+        
+        if not patterns:
+            return (None, None)
+        
+        # Return highest priority pattern
+        patterns.sort(key=lambda x: x[2], reverse=True)
+        return (patterns[0][0], patterns[0][1])
+    
+    def _check_rsi_divergence(self, closes: List[float], period: int = 14) -> Optional[str]:
+        """
+        Check for RSI divergence over last 20 bars.
+        Bullish: price lower low, RSI higher low.
+        Bearish: price higher high, RSI lower high.
+        """
+        if len(closes) < period + 10:
+            return None
+        
+        # Calculate RSI at two points: ~10 bars ago and now
+        rsi_now = self._calc_rsi(closes, period)
+        rsi_prev = self._calc_rsi(closes[:-10], period)
+        
+        if rsi_now is None or rsi_prev is None:
+            return None
+        
+        price_now = closes[-1]
+        price_prev = min(closes[-15:-5])  # Low around 10 bars ago
+        price_recent_low = min(closes[-5:])
+        price_prev_high = max(closes[-15:-5])
+        price_recent_high = max(closes[-5:])
+        
+        # Bullish divergence: price lower low but RSI higher low
+        if price_recent_low < price_prev and rsi_now > rsi_prev and rsi_now < 45:
+            return 'bullish'
+        
+        # Bearish divergence: price higher high but RSI lower high
+        if price_recent_high > price_prev_high and rsi_now < rsi_prev and rsi_now > 55:
+            return 'bearish'
+        
+        return None
+    
+    def _calc_support_resistance(self, highs: List[float], lows: List[float]) -> tuple:
+        """
+        Simple support/resistance from 30-day price data.
+        Support = area where lows cluster, Resistance = area where highs cluster.
+        Uses percentile approach for robustness.
+        """
+        if len(lows) < 10 or len(highs) < 10:
+            return (None, None)
+        
+        # Support: 10th percentile of lows
+        sorted_lows = sorted(lows)
+        support_idx = max(0, len(sorted_lows) // 10)
+        support = sorted_lows[support_idx]
+        
+        # Resistance: 90th percentile of highs
+        sorted_highs = sorted(highs)
+        resistance_idx = min(len(sorted_highs) - 1, len(sorted_highs) * 9 // 10)
+        resistance = sorted_highs[resistance_idx]
+        
+        return (support, resistance)
     
     def _calc_rsi(self, closes: List[float], period: int = 14) -> Optional[float]:
         """Calculate RSI."""
