@@ -24,25 +24,29 @@ except ImportError:
 SYSTEM_PROMPT = """Du är en autonom trading-agent för svenska aktier på Stockholmsbörsen.
 Du förvaltar ett paper trading-konto med mål att dubbla 20 000 kr på 6 månader.
 
-## STRATEGI: Momentum + Rapport Swing Trading
+## AGGRESSIV STRATEGI: Momentum + Rapport Swing Trading
 
 ### ENTRY-REGLER (alla måste uppfyllas för KÖP):
-- RSI < 65 (ej överköpt)
 - Pris > SMA20 (upptrend)
 - Positiv sentiment ELLER rapport-katalysator ELLER stark makro-medvind
-- Confidence > 65%
+- Confidence > 55%
+- **TVINGANDE REGEL: Om cash > 20% av total value → MÅSTE ge BUY-beslut**
 
 ### EXIT-REGLER:
 - Stop-loss: -5% från entry → SÄLJ
-- Take-profit: +8% → SÄLJ
+- Take-profit: +10% → SÄLJ
 - Trailing stop: vid +5% flytta mental SL till +2%
 - Tidsstopp: efter 10 dagar, om under +3% → SÄLJ
 
 ### RISKHANTERING:
 - Max 5 samtida positioner
 - Max 25% av portföljen i en position
-- INGA KÖP om OMXS30 är ner mer än -1% idag (risk-off)
+- INGA KÖP om OMXS30 är ner mer än -2.5% idag (risk-off)
 - Sprid över sektorer — max 2 positioner i samma sektor
+
+### AGGRESSIV MENTALITET:
+Du FÖRVALTAR aktivt. Cash = dåligt. Varje dag pengar sitter stilla förlorar vi mot målet.
+Bättre att vara i marknaden än att missa momentum. RSI-restriktioner har tagits bort.
 
 ### OUTPUT-FORMAT (STRIKT JSON):
 Svara ENBART med valid JSON, inget annat:
@@ -50,7 +54,7 @@ Svara ENBART med valid JSON, inget annat:
   "decisions": [
     {
       "action": "BUY" eller "SELL" eller "HOLD",
-      "ticker": "TICKER",
+      "ticker": "TICKER", 
       "reason": "Kort motivering",
       "confidence": 0-100,
       "position_size_pct": 5-25
@@ -61,7 +65,7 @@ Svara ENBART med valid JSON, inget annat:
 }
 
 Om inget ska göras, returnera tom decisions-lista.
-Var DISCIPLINERAD. Bättre att missa en trade än att ta en dålig."""
+Var AGGRESSIV men DISCIPLINERAD. Bättre att vara i marknaden än att sitta passiv."""
 
 
 class TradingBrain:
@@ -400,9 +404,9 @@ class TradingBrain:
             if action == "HOLD":
                 continue
 
-            # Rule: confidence > 65%
-            if confidence < 65:
-                logger.info(f"🚫 {ticker} rejected: confidence {confidence}% < 65%")
+            # Rule: confidence > 55%
+            if confidence < 55:
+                logger.info(f"🚫 {ticker} rejected: confidence {confidence}% < 55%")
                 continue
 
             if action == "BUY":
@@ -411,8 +415,8 @@ class TradingBrain:
                     logger.info(f"🚫 {ticker} rejected: max 5 positions reached")
                     continue
 
-                # Rule: no buys if OMXS30 down > 1%
-                if omxs30_change < -1.0:
+                # Rule: no buys if OMXS30 down > 2.5%
+                if omxs30_change < -2.5:
                     logger.info(f"🚫 {ticker} rejected: OMXS30 {omxs30_change:.1f}% (risk-off)")
                     continue
 
@@ -432,7 +436,7 @@ class TradingBrain:
                         logger.info(f"🚫 {ticker} rejected: insufficient cash")
                         continue
 
-                # Validate technical signals (RSI < 65, price > SMA20)
+                # Validate technical signals (price > SMA20, RSI warning only)
                 tech = self.db.query("""
                     SELECT rsi, sma20 FROM technical_signals
                     WHERE ticker = :ticker ORDER BY date DESC LIMIT 1
@@ -446,8 +450,8 @@ class TradingBrain:
                 if tech and tech[0].get('rsi'):
                     rsi = float(tech[0]['rsi'])
                     if rsi > 65:
-                        logger.info(f"🚫 {ticker} rejected: RSI {rsi:.0f} > 65")
-                        continue
+                        logger.info(f"⚠️ {ticker} warning: RSI {rsi:.0f} > 65 (overköpt men tillåtet)")
+                        # Don't reject - just warn
 
                 if tech and tech[0].get('sma20') and price_rows:
                     sma20 = float(tech[0]['sma20'])
@@ -466,6 +470,11 @@ class TradingBrain:
                     logger.info(f"🚫 {ticker} SELL rejected: not in portfolio")
                     continue
                 validated.append(d)
+
+        # Check cash ratio - warn if too much cash sitting idle
+        cash_ratio = (cash / total_value) * 100 if total_value > 0 else 0
+        if cash_ratio > 20:
+            logger.warning(f"⚠️ FOR MYCKET CASH ({cash_ratio:.0f}%) - brain måste deploya mer aggressivt")
 
         logger.info(f"🧠 Validated {len(validated)}/{len(raw)} decisions")
         return validated

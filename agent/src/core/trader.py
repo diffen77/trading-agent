@@ -177,6 +177,51 @@ class PaperTrader:
         
         return executed
     
+    def _execute_auto_sell(self, ticker: str, shares: float, current_price: float, reason: str):
+        """Execute automatic sell order."""
+        try:
+            trade = {
+                'ticker': ticker,
+                'action': 'SELL',
+                'shares': shares,
+                'price': current_price,
+                'total_value': shares * current_price,
+                'reasoning': f"AUTO-SELL: {reason}",
+                'confidence': 100,
+                'hypothesis': f"Automatic exit: {reason}",
+                'macro_context': {},
+                'target_price': None,
+                'stop_loss': None,
+                'target_pct': 0,
+                'stop_loss_pct': 0,
+            }
+            self.db.log_trade(trade)
+            logger.info(f"✅ AUTO-SELL executed: {shares:.2f} {ticker} @ {current_price:.2f} SEK")
+        except Exception as e:
+            logger.error(f"Error executing auto-sell for {ticker}: {e}")
+    
+    def _update_trailing_stop(self, ticker: str, avg_price: float, current_pnl_pct: float):
+        """Update trailing stop-loss in trades table."""
+        try:
+            # New stop-loss at +2% from entry price
+            new_stop_loss = avg_price * 1.02
+            
+            # Update the most recent open trade for this ticker
+            self.db.execute("""
+                UPDATE trades SET 
+                    stop_loss = %s,
+                    stop_loss_pct = 2.0
+                WHERE ticker = %s 
+                AND closed_at IS NULL 
+                AND action = 'BUY'
+                ORDER BY executed_at DESC 
+                LIMIT 1
+            """, (new_stop_loss, ticker))
+            
+            logger.info(f"📈 {ticker}: Trailing stop updated to +2% ({new_stop_loss:.2f} SEK)")
+        except Exception as e:
+            logger.error(f"Error updating trailing stop for {ticker}: {e}")
+    
     def check_positions(self):
         """Check current positions for stop-loss or take-profit."""
         portfolio = self.db.get_portfolio()
@@ -187,6 +232,7 @@ class PaperTrader:
         
         for _, pos in portfolio.iterrows():
             ticker = pos['ticker']
+            shares = float(pos['shares'])
             avg_price = float(pos['avg_price'])
             
             # Get current price
@@ -197,14 +243,21 @@ class PaperTrader:
             current_price = float(prices.iloc[0]['close'])
             pnl_pct = ((current_price / avg_price) - 1) * 100
             
-            # Check stop-loss (-5%)
+            # Check stop-loss (-5%) - EXECUTE ACTUAL SELL
             if pnl_pct <= -5:
-                logger.warning(f"⚠️ {ticker}: Stop-loss triggered ({pnl_pct:.1f}%)")
-                # TODO: Execute sell
+                logger.warning(f"🔴 {ticker}: Stop-loss triggered ({pnl_pct:.1f}%) - EXECUTING SELL")
+                self._execute_auto_sell(ticker, shares, current_price, "Stop-loss triggered")
                 
-            # Check take-profit (variable based on strategy)
+            # Check take-profit (+10%) - EXECUTE ACTUAL SELL  
             elif pnl_pct >= 10:
-                logger.info(f"✅ {ticker}: Consider taking profit ({pnl_pct:.1f}%)")
+                logger.info(f"🟢 {ticker}: Take-profit triggered ({pnl_pct:.1f}%) - EXECUTING SELL")
+                self._execute_auto_sell(ticker, shares, current_price, "Take-profit triggered")
+                
+            # Implement trailing stop: vid +5%, flytta stop-loss till +2%
+            elif pnl_pct >= 5:
+                logger.info(f"📈 {ticker}: Trailing stop activated at +{pnl_pct:.1f}% - monitoring for +2% floor")
+                # Check if we should update stop loss in trades table
+                self._update_trailing_stop(ticker, avg_price, pnl_pct)
     
     def log_daily_performance(self):
         """Log end of day performance."""
