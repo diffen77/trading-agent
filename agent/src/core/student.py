@@ -102,6 +102,16 @@ class TradingStudent:
         study_type = study_rotation.get(hour, 'backtest')
         
         try:
+            # Test database connection first
+            try:
+                self.db.query("SELECT 1")
+                logger.info(f"📚 Database connection OK, running {study_type}")
+            except Exception as db_error:
+                logger.warning(f"📚 Database not available: {db_error}")
+                results['error'] = f"Database connection failed: {db_error}"
+                results['status'] = 'database_error'
+                return results
+            
             if study_type == 'backtest':
                 result = self.run_backtest_engine()
                 results['studies_completed'].append('backtest')
