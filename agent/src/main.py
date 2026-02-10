@@ -35,6 +35,7 @@ from .data.reports import ReportTracker
 from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
 from .core.brain import TradingBrain
+from .core.student import TradingStudent
 
 # Setup logging
 logging.basicConfig(
@@ -72,39 +73,69 @@ def main():
     except Exception as e:
         logger.warning(f"⚠️ AI Brain not available: {e}")
     
+    # Initialize study module
+    student = None
+    try:
+        # Web search function for student (if available)
+        try:
+            from ..utils.web_search import web_search_function
+            web_search_func = web_search_function
+        except:
+            web_search_func = None
+        
+        student = TradingStudent(db, web_search_func)
+        logger.info("📚 Trading Student initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Trading Student not available: {e}")
+    
     logger.info("✅ Components initialized")
     
     # Check for command-line mode override
     mode = sys.argv[1] if len(sys.argv) > 1 else None
     
     if mode and mode == 'daemon':
-        run_daemon(yahoo, db, analyzer, trader, brain)
+        run_daemon(yahoo, db, analyzer, trader, brain, student)
     elif mode == 'brain':
         if brain:
             result = brain.run_cycle(trader, deep=True)
             logger.info(f"🧠 Brain result: {result}")
         else:
             logger.error("Brain not available")
+    elif mode == 'student':
+        if student:
+            result = student.study_cycle()
+            logger.info(f"📚 Student result: {result}")
+        else:
+            logger.error("Student not available")
+    elif mode == 'deep_study':
+        if student:
+            result = student.deep_study()
+            logger.info(f"📚🔬 Deep study result: {result}")
+        else:
+            logger.error("Student not available")
     elif mode:
-        run_mode(mode, yahoo, db, analyzer, trader, brain)
+        run_mode(mode, yahoo, db, analyzer, trader, brain, student)
         logger.info("✅ Agent routine complete")
     else:
-        run_daemon(yahoo, db, analyzer, trader, brain)
+        run_daemon(yahoo, db, analyzer, trader, brain, student)
 
 
-def run_daemon(yahoo, db, analyzer, trader, brain=None):
+def run_daemon(yahoo, db, analyzer, trader, brain=None, student=None):
     """Run as a long-lived daemon with scheduled routines.
     
     Schedule:
     - Every 10 min during market hours: update prices, TA, news
     - Every 30 min during market hours (08:00-16:30 UTC): brain cycle
+    - Every 60 min OUTSIDE market hours: student study cycle
+    - Every 2 hours on weekends: deep study cycle
     - 06:00 UTC: morning deep analysis
     - 17:00 UTC: daily summary
     """
-    logger.info("🔄 Running in daemon mode — checking every 10 minutes")
+    logger.info("🔄 Running in daemon mode — market/study cycles every 10/60 minutes")
     
     last_scheduled_hour = -1
     last_brain_minute = -1  # Track last brain run (30-min intervals)
+    last_study_hour = -1   # Track last study run (60-min intervals)
     
     while True:
         try:
@@ -185,6 +216,36 @@ def run_daemon(yahoo, db, analyzer, trader, brain=None):
                         logger.error(f"Brain cycle error: {e}", exc_info=True)
                     last_brain_minute = brain_slot
             else:
+                # ------ STUDENT CYCLE OUTSIDE MARKET HOURS ------
+                if student and current_hour != last_study_hour:
+                    # Weekend deep study (every 2 hours)
+                    if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+                        if current_hour % 2 == 0:  # Even hours: 0, 2, 4, 6...
+                            logger.info(f"📚🔬 Weekend deep study (UTC {now.strftime('%H:%M')})")
+                            try:
+                                result = student.deep_study()
+                                logger.info(f"📚 Deep study: {len(result['studies_completed'])} studies, "
+                                           f"{result['insights_generated']} insights, "
+                                           f"{result['learnings_added']} learnings")
+                            except Exception as e:
+                                logger.error(f"Deep study error: {e}", exc_info=True)
+                            last_study_hour = current_hour
+                    
+                    # Regular study cycle (every hour outside market hours)
+                    else:
+                        logger.info(f"📚 Study cycle (UTC {now.strftime('%H:%M')})")
+                        try:
+                            result = student.study_cycle()
+                            if result.get('studies_completed'):
+                                logger.info(f"📚 Study: {result['studies_completed']}")
+                            if result.get('insights_generated', 0) > 0:
+                                logger.info(f"💡 Generated {result['insights_generated']} insights")
+                            if result.get('learnings_added', 0) > 0:
+                                logger.info(f"📚 Added {result['learnings_added']} learnings")
+                        except Exception as e:
+                            logger.error(f"Study cycle error: {e}", exc_info=True)
+                        last_study_hour = current_hour
+                
                 logger.debug(f"💤 Outside market hours (UTC {current_hour}:00)")
             
             # Sleep 10 minutes between checks
@@ -198,7 +259,7 @@ def run_daemon(yahoo, db, analyzer, trader, brain=None):
             time.sleep(60)
 
 
-def run_mode(mode: str, yahoo, db, analyzer, trader, brain=None):
+def run_mode(mode: str, yahoo, db, analyzer, trader, brain=None, student=None):
     """Run a specific mode."""
     logger.info(f"🎯 Running mode: {mode}")
     
@@ -221,9 +282,21 @@ def run_mode(mode: str, yahoo, db, analyzer, trader, brain=None):
         yahoo.update_macro_data(db)
     elif mode == 'prospects':
         analyzer.update_prospects()
+    elif mode == 'student':
+        if student:
+            result = student.study_cycle()
+            logger.info(f"📚 Student cycle result: {result}")
+        else:
+            logger.error("Student not available")
+    elif mode == 'deep_study':
+        if student:
+            result = student.deep_study()
+            logger.info(f"📚 Deep study result: {result}")
+        else:
+            logger.error("Student not available")
     else:
         logger.warning(f"Unknown mode: {mode}")
-        logger.info("Available modes: morning, open, midday, close, evening, analyze, snapshot, update, prospects")
+        logger.info("Available modes: morning, open, midday, close, evening, analyze, snapshot, update, prospects, student, deep_study")
 
 
 def run_scheduled(hour: int, yahoo, db, analyzer, trader):
