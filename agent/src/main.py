@@ -34,6 +34,7 @@ from .data.news import NewsFetcher
 from .data.reports import ReportTracker
 from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
+from .core.brain import TradingBrain
 
 # Setup logging
 logging.basicConfig(
@@ -63,42 +64,91 @@ def main():
     analyzer = MarketAnalyzer(db)
     trader = PaperTrader(db)
     
+    # Initialize AI brain
+    brain = None
+    try:
+        brain = TradingBrain(db)
+        logger.info("🧠 AI Brain initialized (Claude Sonnet)")
+    except Exception as e:
+        logger.warning(f"⚠️ AI Brain not available: {e}")
+    
     logger.info("✅ Components initialized")
     
     # Check for command-line mode override
     mode = sys.argv[1] if len(sys.argv) > 1 else None
     
     if mode and mode == 'daemon':
-        run_daemon(yahoo, db, analyzer, trader)
+        run_daemon(yahoo, db, analyzer, trader, brain)
+    elif mode == 'brain':
+        if brain:
+            result = brain.run_cycle(trader, deep=True)
+            logger.info(f"🧠 Brain result: {result}")
+        else:
+            logger.error("Brain not available")
     elif mode:
-        run_mode(mode, yahoo, db, analyzer, trader)
+        run_mode(mode, yahoo, db, analyzer, trader, brain)
         logger.info("✅ Agent routine complete")
     else:
-        # Default: run as daemon (keeps container alive)
-        run_daemon(yahoo, db, analyzer, trader)
+        run_daemon(yahoo, db, analyzer, trader, brain)
 
 
-def run_daemon(yahoo, db, analyzer, trader):
-    """Run as a long-lived daemon with scheduled routines."""
+def run_daemon(yahoo, db, analyzer, trader, brain=None):
+    """Run as a long-lived daemon with scheduled routines.
+    
+    Schedule:
+    - Every 10 min during market hours: update prices, TA, news
+    - Every 30 min during market hours (08:00-16:30 UTC): brain cycle
+    - 06:00 UTC: morning deep analysis
+    - 17:00 UTC: daily summary
+    """
     logger.info("🔄 Running in daemon mode — checking every 10 minutes")
     
     last_scheduled_hour = -1
+    last_brain_minute = -1  # Track last brain run (30-min intervals)
     
     while True:
         try:
             now = datetime.utcnow()
             current_hour = now.hour
+            current_minute = now.minute
             
-            # Run scheduled routines once per hour (at the right hours)
-            if current_hour != last_scheduled_hour and current_hour in SCHEDULE_UTC:
-                mode = SCHEDULE_UTC[current_hour]
-                logger.info(f"⏰ Scheduled run: {mode} (UTC {current_hour}:00)")
-                run_mode(mode, yahoo, db, analyzer, trader)
-                last_scheduled_hour = current_hour
+            # ------ SCHEDULED ROUTINES (once per hour) ------
+            if current_hour != last_scheduled_hour:
+                
+                # 06:00 UTC: Morning deep analysis with brain
+                if current_hour == 6:
+                    logger.info("🌅 06:00 UTC — Morning deep analysis")
+                    run_morning_routine(yahoo, db, analyzer)
+                    if brain:
+                        try:
+                            result = brain.run_cycle(trader, deep=True)
+                            logger.info(f"🧠 Morning brain: {result['decisions_executed']} trades")
+                        except Exception as e:
+                            logger.error(f"Morning brain error: {e}")
+                    last_scheduled_hour = current_hour
+                
+                # 17:00 UTC: Daily summary
+                elif current_hour == 17:
+                    logger.info("🌆 17:00 UTC — Daily summary")
+                    run_eod_routine(yahoo, db, analyzer, trader)
+                    if brain:
+                        try:
+                            summary = brain.generate_daily_summary()
+                            logger.info(f"🧠 Daily summary: {summary}")
+                        except Exception as e:
+                            logger.error(f"Daily summary error: {e}")
+                    last_scheduled_hour = current_hour
+                
+                # Other scheduled hours
+                elif current_hour in SCHEDULE_UTC:
+                    mode = SCHEDULE_UTC[current_hour]
+                    logger.info(f"⏰ Scheduled run: {mode} (UTC {current_hour}:00)")
+                    run_mode(mode, yahoo, db, analyzer, trader, brain)
+                    last_scheduled_hour = current_hour
             
-            # Every 10 min during market hours: update prices + technical + news
-            elif 7 <= current_hour <= 17:
-                logger.info(f"📊 Price update + analysis (UTC {now.strftime('%H:%M')})")
+            # ------ EVERY 10 MIN DURING MARKET HOURS ------
+            if 7 <= current_hour <= 17:
+                logger.info(f"📊 Price update + TA (UTC {now.strftime('%H:%M')})")
                 yahoo.update_all_prices(db)
                 
                 # Technical analysis after price update
@@ -119,6 +169,21 @@ def run_daemon(yahoo, db, analyzer, trader):
                 
                 trader.check_positions()
                 db.save_portfolio_snapshot()
+                
+                # ------ BRAIN CYCLE EVERY 30 MIN (08:00-16:30 UTC) ------
+                brain_slot = current_hour * 60 + (current_minute // 30) * 30
+                if (brain and 8 <= current_hour <= 16 
+                    and brain_slot != last_brain_minute):
+                    logger.info(f"🧠 Brain cycle (UTC {now.strftime('%H:%M')})")
+                    try:
+                        result = brain.run_cycle(trader, deep=False)
+                        logger.info(
+                            f"🧠 Brain: {result['outlook']} | "
+                            f"{result['decisions_executed']} executed"
+                        )
+                    except Exception as e:
+                        logger.error(f"Brain cycle error: {e}", exc_info=True)
+                    last_brain_minute = brain_slot
             else:
                 logger.debug(f"💤 Outside market hours (UTC {current_hour}:00)")
             
@@ -130,10 +195,10 @@ def run_daemon(yahoo, db, analyzer, trader):
             break
         except Exception as e:
             logger.error(f"❌ Error in daemon loop: {e}", exc_info=True)
-            time.sleep(60)  # Wait 1 min on error, then retry
+            time.sleep(60)
 
 
-def run_mode(mode: str, yahoo, db, analyzer, trader):
+def run_mode(mode: str, yahoo, db, analyzer, trader, brain=None):
     """Run a specific mode."""
     logger.info(f"🎯 Running mode: {mode}")
     

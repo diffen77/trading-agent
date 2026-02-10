@@ -27,6 +27,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://trading:${DB_PASSWORD:-trading_dev_123}@db:5432/trading_agent
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       PYTHONUNBUFFERED: 1
     volumes:
       - ./agent:/app
