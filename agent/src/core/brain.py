@@ -1,7 +1,7 @@
 """
 AI Brain - Autonomous Trading Decision Engine
 
-Uses Claude Sonnet to analyze market data and make trading decisions.
+Uses LLM (Ollama/OpenAI-compatible or Anthropic) to analyze market data and make trading decisions.
 All decisions are logged to ai_decisions table for audit trail.
 """
 
@@ -13,12 +13,25 @@ from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Try OpenAI client first (works with Ollama), fall back to Anthropic
+HAS_OPENAI = False
+HAS_ANTHROPIC = False
+
 try:
-    import anthropic
-    HAS_ANTHROPIC = True
+    from openai import OpenAI
+    HAS_OPENAI = True
 except ImportError:
-    HAS_ANTHROPIC = False
-    logger.warning("anthropic package not installed - brain disabled")
+    pass
+
+if not HAS_OPENAI:
+    try:
+        import anthropic
+        HAS_ANTHROPIC = True
+    except ImportError:
+        pass
+
+if not HAS_OPENAI and not HAS_ANTHROPIC:
+    logger.warning("Neither openai nor anthropic package installed - brain disabled")
 
 
 SYSTEM_PROMPT = """Du är en autonom trading-agent för svenska aktier på Stockholmsbörsen.
@@ -69,18 +82,43 @@ Var AGGRESSIV men DISCIPLINERAD. Bättre att vara i marknaden än att sitta pass
 
 
 class TradingBrain:
-    """AI-powered trading decision engine using Claude Sonnet."""
+    """AI-powered trading decision engine. Supports Ollama (free) or Anthropic."""
 
-    MODEL = "claude-sonnet-4-20250514"
+    # Ollama model (free, local)
+    OLLAMA_MODEL = "qwen2.5-coder:32b-instruct-q4_K_M"
+    ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 
     def __init__(self, db):
         self.db = db
-        if not HAS_ANTHROPIC:
-            raise RuntimeError("anthropic package not installed")
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.backend = None  # 'ollama' or 'anthropic'
+        
+        # Try Ollama first (free, local)
+        ollama_url = os.getenv("OLLAMA_URL", "http://192.168.99.176:11434")
+        if HAS_OPENAI:
+            try:
+                self.client = OpenAI(
+                    base_url=f"{ollama_url}/v1",
+                    api_key="ollama",  # Ollama doesn't need a real key
+                )
+                self.backend = 'ollama'
+                self.model = self.OLLAMA_MODEL
+                logger.info(f"🧠 Brain using Ollama ({self.model}) at {ollama_url}")
+            except Exception as e:
+                logger.warning(f"Ollama init failed: {e}")
+        
+        # Fall back to Anthropic
+        if not self.backend and HAS_ANTHROPIC:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if api_key:
+                self.client = anthropic.Anthropic(api_key=api_key)
+                self.backend = 'anthropic'
+                self.model = self.ANTHROPIC_MODEL
+                logger.info(f"🧠 Brain using Anthropic ({self.model})")
+            else:
+                raise RuntimeError("ANTHROPIC_API_KEY not set")
+        
+        if not self.backend:
+            raise RuntimeError("No LLM backend available (install openai or anthropic package)")
 
     # ------------------------------------------------------------------
     # Context gathering
@@ -303,22 +341,17 @@ class TradingBrain:
             "Analysera all data och ge dina trading-beslut som JSON."
         )
 
-        logger.info(f"🧠 Calling Claude Sonnet ({'deep' if deep else 'standard'} analysis)...")
+        logger.info(f"🧠 Calling {self.backend} ({self.model}) ({'deep' if deep else 'standard'} analysis)...")
 
         try:
-            response = self.client.messages.create(
-                model=self.MODEL,
-                max_tokens=2000,
+            raw_text, prompt_tokens, response_tokens = self._call_llm(
                 system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_msg}],
+                user_msg=user_msg,
+                max_tokens=2000,
             )
 
-            raw_text = response.content[0].text
-            prompt_tokens = response.usage.input_tokens
-            response_tokens = response.usage.output_tokens
-
             logger.info(
-                f"🧠 Claude response: {prompt_tokens} in / {response_tokens} out tokens"
+                f"🧠 LLM response: {prompt_tokens} in / {response_tokens} out tokens"
             )
 
             # Parse JSON from response (handle markdown code blocks)
@@ -611,18 +644,56 @@ class TradingBrain:
         )
 
         try:
-            response = self.client.messages.create(
-                model=self.MODEL,
-                max_tokens=500,
+            summary, _, _ = self._call_llm(
                 system="Du är en trading-assistent. Ge koncisa dagliga sammanfattningar på svenska.",
-                messages=[{"role": "user", "content": user_msg}],
+                user_msg=user_msg,
+                max_tokens=500,
             )
-            summary = response.content[0].text
             logger.info(f"🧠 Daily summary: {summary}")
             return summary
         except Exception as e:
             logger.error(f"Daily summary error: {e}")
             return f"Kunde inte generera sammanfattning: {e}"
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+    # LLM abstraction
+    # ------------------------------------------------------------------
+
+    def _call_llm(self, system: str, user_msg: str, max_tokens: int = 2000) -> tuple:
+        """
+        Call LLM (Ollama or Anthropic). Returns (text, prompt_tokens, response_tokens).
+        """
+        if self.backend == 'ollama':
+            response = self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.3,
+            )
+            raw_text = response.choices[0].message.content
+            prompt_tokens = getattr(response.usage, 'prompt_tokens', 0) or 0
+            response_tokens = getattr(response.usage, 'completion_tokens', 0) or 0
+            return (raw_text, prompt_tokens, response_tokens)
+        
+        elif self.backend == 'anthropic':
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            raw_text = response.content[0].text
+            prompt_tokens = response.usage.input_tokens
+            response_tokens = response.usage.output_tokens
+            return (raw_text, prompt_tokens, response_tokens)
+        
+        else:
+            raise RuntimeError(f"Unknown backend: {self.backend}")
 
     # ------------------------------------------------------------------
     # Logging
