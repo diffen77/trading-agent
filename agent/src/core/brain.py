@@ -84,8 +84,8 @@ Var AGGRESSIV men DISCIPLINERAD. Bättre att vara i marknaden än att sitta pass
 class TradingBrain:
     """AI-powered trading decision engine. Supports Ollama (free) or Anthropic."""
 
-    # Ollama model (free, local)
-    OLLAMA_MODEL = "qwen2.5-coder:32b-instruct-q4_K_M"
+    # Ollama model (free, local) - 14B for speed, 32B too slow with large context
+    OLLAMA_MODEL = "qwen2.5:14b-instruct-q4_K_M"
     ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 
     def __init__(self, db):
