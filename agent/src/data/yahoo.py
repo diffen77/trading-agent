@@ -72,7 +72,7 @@ class YahooDataFetcher:
             logger.error(f"Error fetching {ticker}: {e}")
             return None
     
-    def fetch_all_prices(self, period: str = "1d") -> pd.DataFrame:
+    def fetch_all_prices(self, period: str = "6mo") -> pd.DataFrame:
         """Fetch prices for all Stockholm stocks."""
         logger.info(f"Fetching prices for {len(self.tickers)} stocks...")
         
@@ -142,7 +142,7 @@ class YahooDataFetcher:
     
     def update_all_prices(self, db):
         """Update all prices in database."""
-        prices_df = self.fetch_all_prices(period="5d")
+        prices_df = self.fetch_all_prices(period="6mo")
         if not prices_df.empty:
             db.save_prices(prices_df)
             logger.info(f"Updated {len(prices_df)} price records")

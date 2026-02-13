@@ -187,7 +187,7 @@ class PaperTrader:
                 'price': current_price,
                 'total_value': shares * current_price,
                 'reasoning': f"AUTO-SELL: {reason}",
-                'confidence': 100,
+                'confidence': 99,
                 'hypothesis': f"Automatic exit: {reason}",
                 'macro_context': {},
                 'target_price': None,
@@ -206,16 +206,19 @@ class PaperTrader:
             # New stop-loss at +2% from entry price
             new_stop_loss = avg_price * 1.02
             
-            # Update the most recent open trade for this ticker
+            # Update the most recent open trade for this ticker using subquery
             self.db.execute("""
                 UPDATE trades SET 
                     stop_loss = %s,
                     stop_loss_pct = 2.0
-                WHERE ticker = %s 
-                AND closed_at IS NULL 
-                AND action = 'BUY'
-                ORDER BY executed_at DESC 
-                LIMIT 1
+                WHERE id = (
+                    SELECT id FROM trades 
+                    WHERE ticker = %s 
+                    AND closed_at IS NULL 
+                    AND action = 'BUY'
+                    ORDER BY executed_at DESC 
+                    LIMIT 1
+                )
             """, (new_stop_loss, ticker))
             
             logger.info(f"📈 {ticker}: Trailing stop updated to +2% ({new_stop_loss:.2f} SEK)")

@@ -226,9 +226,9 @@ class TradingStudent:
             'best_return': -100
         }
         
-        # Test 3-month period ending yesterday
-        end_date = date.today() - timedelta(days=1)
-        start_date = end_date - timedelta(days=90)
+        # Test recent period with available data
+        end_date = date.today()
+        start_date = end_date - timedelta(days=7)  # Just last week for now
         
         for strategy in strategies[:2]:  # Limit to 2 strategies per cycle to avoid overload
             try:
@@ -280,21 +280,33 @@ class TradingStudent:
         for ticker_row in tickers:
             ticker = ticker_row['ticker']
             
-            # Get price and technical data for this ticker in the period
-            price_data = self.db.query("""
-                SELECT date, close FROM prices 
-                WHERE ticker = %s AND date BETWEEN %s AND %s
-                ORDER BY date
-            """, (ticker, start_date, end_date))
-            
-            tech_data = self.db.query("""
-                SELECT date, rsi, sma20, sma50, pattern, pattern_signal
-                FROM technical_signals 
-                WHERE ticker = %s AND date BETWEEN %s AND %s
-                ORDER BY date
-            """, (ticker, start_date, end_date))
-            
-            if not price_data or not tech_data:
+            try:
+                # Get price and technical data for this ticker in the period
+                price_data = self.db.query("""
+                    SELECT date, close FROM prices 
+                    WHERE ticker = :ticker AND date BETWEEN :start_date AND :end_date
+                    ORDER BY date
+                """, {'ticker': ticker, 'start_date': start_date, 'end_date': end_date})
+                
+                tech_data = self.db.query("""
+                    SELECT date, rsi, sma20, sma50, pattern, pattern_signal
+                    FROM technical_signals 
+                    WHERE ticker = :ticker AND date BETWEEN :start_date AND :end_date
+                    ORDER BY date
+                """, {'ticker': ticker, 'start_date': start_date, 'end_date': end_date})
+                
+                if not price_data or not tech_data:
+                    continue
+                
+                # Debug: Log data types to understand the error
+                logger.debug(f"price_data type: {type(price_data)}, tech_data type: {type(tech_data)}")
+                if price_data:
+                    logger.debug(f"price_data[0] type: {type(price_data[0])}")
+                if tech_data:
+                    logger.debug(f"tech_data[0] type: {type(tech_data[0])}")
+                
+            except Exception as data_error:
+                logger.error(f"Data fetch error for {ticker}: {data_error}")
                 continue
             
             # Apply strategy logic
@@ -515,10 +527,14 @@ class TradingStudent:
         # Get prices around the report date
         price_data = self.db.query("""
             SELECT date, close FROM prices
-            WHERE ticker = %s 
-            AND date BETWEEN %s AND %s
+            WHERE ticker = :ticker 
+            AND date BETWEEN :start_date AND :end_date
             ORDER BY date
-        """, (ticker, report_date - timedelta(days=5), report_date + timedelta(days=15)))
+        """, {
+            'ticker': ticker, 
+            'start_date': report_date - timedelta(days=5), 
+            'end_date': report_date + timedelta(days=15)
+        })
         
         if len(price_data) < 10:
             return None
@@ -666,18 +682,22 @@ class TradingStudent:
         # Get price history around trade
         price_history = self.db.query("""
             SELECT date, close FROM prices
-            WHERE ticker = %s 
-            AND date BETWEEN %s AND %s
+            WHERE ticker = :ticker 
+            AND date BETWEEN :start_date AND :end_date
             ORDER BY date
-        """, (ticker, trade_date.date() - timedelta(days=30), trade_date.date() + timedelta(days=30)))
+        """, {
+            'ticker': ticker, 
+            'start_date': trade_date.date() - timedelta(days=30), 
+            'end_date': trade_date.date() + timedelta(days=30)
+        })
         
         # Get macro context at the time
         macro_context = self.db.query("""
             SELECT symbol, value, change_pct FROM macro
-            WHERE date <= %s
+            WHERE date <= :trade_date
             ORDER BY date DESC
             LIMIT 5
-        """, (trade_date.date(),))
+        """, {'trade_date': trade_date.date()})
         
         # Build context for Claude
         price_text = "\n".join([f"{p['date']}: {p['close']:.2f} SEK" for p in price_history[-10:]])
@@ -763,7 +783,23 @@ Svara med JSON:
                     query = f"{company['name']} OR {company['ticker']} Sweden stock news"
                     search_results = self.web_search(query, count=3, freshness='pw')  # Past week
                     
-                    for result in search_results.get('web', {}).get('results', []):
+                    # Safely extract results with validation
+                    results = []
+                    if isinstance(search_results, dict) and 'web' in search_results:
+                        web_data = search_results['web']
+                        if isinstance(web_data, dict) and 'results' in web_data:
+                            raw_results = web_data['results']
+                            if isinstance(raw_results, list):
+                                # Ensure all results are dictionaries
+                                results = [r for r in raw_results if isinstance(r, dict)]
+                            else:
+                                logger.warning(f"Expected list but got {type(raw_results)} for {company['ticker']}")
+                        else:
+                            logger.warning(f"No 'results' in web data for {company['ticker']}")
+                    else:
+                        logger.warning(f"Unexpected search_results format for {company['ticker']}: {type(search_results)}")
+                    
+                    for result in results:
                         # Analyze relevance and sentiment
                         relevance = self._analyze_news_relevance(
                             result['title'] + ' ' + result.get('snippet', ''),
@@ -852,13 +888,13 @@ Svara med JSON:
         # Look for catalyst-indicating content in recent research notes
         catalyst_notes = self.db.query("""
             SELECT topic, content FROM research_notes
-            WHERE ticker = %s 
+            WHERE ticker = :ticker 
             AND created_at >= CURRENT_DATE - INTERVAL '7 days'
             AND (LOWER(content) LIKE '%%rapport%%' 
                  OR LOWER(content) LIKE '%%lansering%%'
                  OR LOWER(content) LIKE '%%contract%%'
                  OR LOWER(content) LIKE '%%avtal%%')
-        """, (ticker,))
+        """, {'ticker': ticker})
         
         # This could be enhanced with NLP to extract specific dates and events
         # For now, just flag that catalysts exist
