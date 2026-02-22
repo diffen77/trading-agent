@@ -9,6 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -265,12 +266,22 @@ class MarketAnalyzer:
                 pattern_bonus = {
                     'golden_cross': 8, 'breakout': 7, 'rsi_bull_divergence': 6,
                     'volume_spike_up': 5, 'support_bounce': 4,
+                    'morning_star': 7, 'bullish_engulfing': 6,
+                    'three_white_soldiers': 7, 'hammer': 5, 'inverted_hammer': 4,
+                    'dragonfly_doji': 4, 'macd_bullish_cross': 6,
+                    'macd_strong_bullish': 4, 'bb_lower_touch': 4,
+                    'double_bottom': 7, 'uptrend_hh_hl': 5,
                 }.get(pattern_name, 4)
                 technical_score += pattern_bonus
             elif pattern_signal == 'bearish':
                 pattern_penalty = {
                     'death_cross': -8, 'breakdown': -7, 'rsi_bear_divergence': -6,
                     'volume_spike_down': -5, 'resistance_rejection': -4,
+                    'evening_star': -7, 'bearish_engulfing': -6,
+                    'three_black_crows': -7, 'gravestone_doji': -4,
+                    'macd_bearish_cross': -6, 'macd_strong_bearish': -4,
+                    'bb_upper_touch': -4, 'double_top': -7,
+                    'downtrend_lh_ll': -5,
                 }.get(pattern_name, -4)
                 technical_score += pattern_penalty
         
@@ -326,6 +337,32 @@ class MarketAnalyzer:
                 'volume_spike_down': 'Volymspike nedåt',
                 'support_bounce': 'Studs från stöd',
                 'resistance_rejection': 'Avvisad vid motstånd',
+                # Candlestick patterns
+                'hammer': 'Hammer (bullish reversal)',
+                'inverted_hammer': 'Inverterad Hammer',
+                'doji_star': 'Doji Star (obeslutsamhet)',
+                'dragonfly_doji': 'Dragonfly Doji (bullish)',
+                'gravestone_doji': 'Gravestone Doji (bearish)',
+                'bullish_engulfing': 'Bullish Engulfing',
+                'bearish_engulfing': 'Bearish Engulfing',
+                'morning_star': 'Morning Star (bullish reversal)',
+                'evening_star': 'Evening Star (bearish reversal)',
+                'three_white_soldiers': 'Three White Soldiers',
+                'three_black_crows': 'Three Black Crows',
+                # Bollinger Bands
+                'bb_squeeze': 'Bollinger Squeeze (breakout väntas)',
+                'bb_upper_touch': 'Vid övre Bollinger Band',
+                'bb_lower_touch': 'Vid nedre Bollinger Band',
+                # MACD
+                'macd_bullish_cross': 'MACD Bullish Crossover',
+                'macd_bearish_cross': 'MACD Bearish Crossover',
+                'macd_strong_bullish': 'MACD Starkt Bullish',
+                'macd_strong_bearish': 'MACD Starkt Bearish',
+                # Chart patterns
+                'double_bottom': 'Dubbelbotten (W-mönster)',
+                'double_top': 'Dubbeltopp (M-mönster)',
+                'uptrend_hh_hl': 'Upptrend (HH/HL)',
+                'downtrend_lh_ll': 'Nedtrend (LH/LL)',
             }
             parts.append(f"Tekniskt: {pattern_labels.get(pattern, pattern)}.")
         
@@ -469,6 +506,7 @@ class MarketAnalyzer:
                 closes = [float(r['close']) for r in rows]
                 highs = [float(r['high'] or r['close']) for r in rows]
                 lows = [float(r['low'] or r['close']) for r in rows]
+                opens = [float(r['open'] or r['close']) for r in rows]
                 volumes = [int(r['volume'] or 0) for r in rows]
                 latest_date = rows[-1]['date']
                 
@@ -495,7 +533,7 @@ class MarketAnalyzer:
                 
                 # Pattern recognition
                 pattern, pattern_signal = self._detect_patterns(
-                    closes, highs, lows, volumes, rsi,
+                    opens, closes, highs, lows, volumes, rsi,
                     sma20, sma50, prev_sma20, prev_sma50, volume_ratio
                 )
                 
@@ -536,7 +574,7 @@ class MarketAnalyzer:
         logger.info(f"📈 Technical analysis complete. {len(alerts)} alerts.")
         return alerts
     
-    def _detect_patterns(self, closes, highs, lows, volumes, rsi,
+    def _detect_patterns(self, opens, closes, highs, lows, volumes, rsi,
                          sma20, sma50, prev_sma20, prev_sma50, volume_ratio) -> tuple:
         """
         Detect chart patterns. Returns (pattern_name, signal) or (None, None).
@@ -592,9 +630,21 @@ class MarketAnalyzer:
                     elif current >= resistance * 0.98 and closes[-1] < closes[-2]:
                         patterns.append(('resistance_rejection', 'bearish', 6))
         
+        # 6. Candlestick Patterns
+        patterns.extend(self._detect_candlestick_patterns(opens, highs, lows, closes))
+
+        # 7. Bollinger Bands
+        patterns.extend(self._detect_bollinger_patterns(closes))
+
+        # 8. MACD Crossovers
+        patterns.extend(self._detect_macd_patterns(closes))
+
+        # 9. Chart Patterns (Double Top/Bottom, HH/HL trend)
+        patterns.extend(self._detect_chart_patterns(closes, highs, lows))
+
         if not patterns:
             return (None, None)
-        
+
         # Return highest priority pattern
         patterns.sort(key=lambda x: x[2], reverse=True)
         return (patterns[0][0], patterns[0][1])
@@ -708,7 +758,225 @@ class MarketAnalyzer:
             components += 1
         
         return max(-100, min(100, score))
-    
+
+    # ── EMA / Bollinger / MACD calculation helpers ──────────────────
+
+    def _calc_ema(self, data, period: int) -> np.ndarray:
+        """Calculate Exponential Moving Average using numpy."""
+        arr = np.array(data, dtype=float)
+        ema = np.empty_like(arr)
+        ema[0] = arr[0]
+        multiplier = 2.0 / (period + 1)
+        for i in range(1, len(arr)):
+            ema[i] = arr[i] * multiplier + ema[i - 1] * (1 - multiplier)
+        return ema
+
+    def _calc_bollinger_bands(self, closes: List[float], period: int = 20, num_std: float = 2.0):
+        """Calculate Bollinger Bands BB(period, num_std).
+        Returns (upper, middle, lower, bandwidth) for the latest bar."""
+        if len(closes) < period:
+            return None, None, None, None
+        arr = np.array(closes[-period:], dtype=float)
+        middle = float(np.mean(arr))
+        std = float(np.std(arr, ddof=1))
+        upper = middle + num_std * std
+        lower = middle - num_std * std
+        bandwidth = (upper - lower) / middle if middle > 0 else 0
+        return upper, middle, lower, bandwidth
+
+    def _calc_macd(self, closes: List[float]):
+        """Calculate MACD (EMA12 - EMA26), Signal (EMA9 of MACD), Histogram.
+        Returns (macd, signal, histogram, prev_macd, prev_signal) or all-None."""
+        if len(closes) < 35:
+            return None, None, None, None, None
+        ema12 = self._calc_ema(closes, 12)
+        ema26 = self._calc_ema(closes, 26)
+        macd_line = ema12 - ema26
+        signal_line = self._calc_ema(macd_line.tolist(), 9)
+        histogram = macd_line - signal_line
+        return (
+            float(macd_line[-1]), float(signal_line[-1]), float(histogram[-1]),
+            float(macd_line[-2]), float(signal_line[-2]),
+        )
+
+    # ── New pattern detectors ───────────────────────────────────────
+
+    def _detect_candlestick_patterns(self, opens, highs, lows, closes) -> List[tuple]:
+        """Detect candlestick patterns from OHLC data.
+        Returns list of (pattern_name, signal, priority)."""
+        patterns = []
+        if len(closes) < 2:
+            return patterns
+
+        o, h, l, c = opens[-1], highs[-1], lows[-1], closes[-1]
+        o1, h1, l1, c1 = opens[-2], highs[-2], lows[-2], closes[-2]
+
+        body = abs(c - o)
+        upper_shadow = h - max(c, o)
+        lower_shadow = min(c, o) - l
+        full_range = h - l
+        body1 = abs(c1 - o1)
+
+        if full_range <= 0:
+            return patterns
+
+        # ── Doji variants ──
+        if body / full_range < 0.1:
+            if lower_shadow > 2 * upper_shadow and lower_shadow > 0.3 * full_range:
+                patterns.append(('dragonfly_doji', 'bullish', 6))
+            elif upper_shadow > 2 * lower_shadow and upper_shadow > 0.3 * full_range:
+                patterns.append(('gravestone_doji', 'bearish', 6))
+            else:
+                patterns.append(('doji_star', 'neutral', 4))
+
+        # ── Hammer (bullish reversal in downtrend) ──
+        if body > 0 and lower_shadow >= 2 * body and upper_shadow <= body * 0.3:
+            if len(closes) >= 5 and closes[-5] > closes[-2]:
+                patterns.append(('hammer', 'bullish', 7))
+
+        # ── Inverted Hammer ──
+        if body > 0 and upper_shadow >= 2 * body and lower_shadow <= body * 0.3:
+            if len(closes) >= 5 and closes[-5] > closes[-2]:
+                patterns.append(('inverted_hammer', 'bullish', 6))
+
+        # ── Engulfing ──
+        if body > 0 and body1 > 0:
+            if c1 < o1 and c > o and o <= c1 and c >= o1:
+                patterns.append(('bullish_engulfing', 'bullish', 8))
+            elif c1 > o1 and c < o and o >= c1 and c <= o1:
+                patterns.append(('bearish_engulfing', 'bearish', 8))
+
+        # ── Three-candle patterns ──
+        if len(closes) >= 3:
+            o2, c2 = opens[-3], closes[-3]
+            body2 = abs(c2 - o2)
+
+            # Morning Star: big down + small body + big up
+            if (body2 > 0 and c2 < o2 and body1 < body2 * 0.3 and
+                    c > o and body > body2 * 0.5 and c > (o2 + c2) / 2):
+                patterns.append(('morning_star', 'bullish', 9))
+
+            # Evening Star: big up + small body + big down
+            if (body2 > 0 and c2 > o2 and body1 < body2 * 0.3 and
+                    c < o and body > body2 * 0.5 and c < (o2 + c2) / 2):
+                patterns.append(('evening_star', 'bearish', 9))
+
+            # Three White Soldiers
+            if (closes[-1] > opens[-1] and closes[-2] > opens[-2] and
+                    closes[-3] > opens[-3] and closes[-1] > closes[-2] > closes[-3]):
+                patterns.append(('three_white_soldiers', 'bullish', 8))
+
+            # Three Black Crows
+            if (closes[-1] < opens[-1] and closes[-2] < opens[-2] and
+                    closes[-3] < opens[-3] and closes[-1] < closes[-2] < closes[-3]):
+                patterns.append(('three_black_crows', 'bearish', 8))
+
+        return patterns
+
+    def _detect_bollinger_patterns(self, closes: List[float]) -> List[tuple]:
+        """Detect Bollinger Band signals: squeeze, upper/lower band touch."""
+        patterns = []
+        upper, middle, lower, bandwidth = self._calc_bollinger_bands(closes, 20, 2.0)
+        if upper is None:
+            return patterns
+
+        current = closes[-1]
+
+        # Squeeze: tight bands → imminent breakout
+        if bandwidth < 0.04:
+            patterns.append(('bb_squeeze', 'neutral', 5))
+
+        # Price at/above upper band → overbought
+        if current >= upper:
+            patterns.append(('bb_upper_touch', 'bearish', 5))
+        # Price at/below lower band → oversold
+        elif current <= lower:
+            patterns.append(('bb_lower_touch', 'bullish', 5))
+
+        return patterns
+
+    def _detect_macd_patterns(self, closes: List[float]) -> List[tuple]:
+        """Detect MACD crossover signals and strong momentum."""
+        patterns = []
+        result = self._calc_macd(closes)
+        if result[0] is None:
+            return patterns
+
+        macd, signal, histogram, prev_macd, prev_signal = result
+
+        # Bullish crossover
+        if prev_macd <= prev_signal and macd > signal:
+            patterns.append(('macd_bullish_cross', 'bullish', 7))
+        # Bearish crossover
+        elif prev_macd >= prev_signal and macd < signal:
+            patterns.append(('macd_bearish_cross', 'bearish', 7))
+
+        # Strong MACD momentum
+        if macd > 0 and histogram > 0 and abs(signal) > 0 and histogram > abs(signal) * 0.5:
+            patterns.append(('macd_strong_bullish', 'bullish', 5))
+        elif macd < 0 and histogram < 0 and abs(signal) > 0 and abs(histogram) > abs(signal) * 0.5:
+            patterns.append(('macd_strong_bearish', 'bearish', 5))
+
+        return patterns
+
+    def _detect_chart_patterns(self, closes: List[float], highs: List[float],
+                               lows: List[float]) -> List[tuple]:
+        """Detect chart patterns: double top/bottom and HH/HL trend structure."""
+        patterns = []
+        if len(closes) < 20:
+            return patterns
+
+        arr_highs = np.array(highs, dtype=float)
+        arr_lows = np.array(lows, dtype=float)
+
+        # ── Double Bottom / Double Top (last 30 bars) ──
+        window = min(30, len(closes))
+        lows_w = arr_lows[-window:]
+        highs_w = arr_highs[-window:]
+
+        if window >= 10:
+            half = window // 2
+
+            # Double Bottom
+            low1_idx = int(np.argmin(lows_w[:half]))
+            low2_idx = half + int(np.argmin(lows_w[half:]))
+            low1, low2 = float(lows_w[low1_idx]), float(lows_w[low2_idx])
+            if low1 > 0 and abs(low1 - low2) / low1 < 0.02 and low2_idx > low1_idx:
+                mid_high = float(np.max(highs_w[low1_idx:low2_idx + 1]))
+                if mid_high > low1 * 1.02 and closes[-1] > low2:
+                    patterns.append(('double_bottom', 'bullish', 8))
+
+            # Double Top
+            high1_idx = int(np.argmax(highs_w[:half]))
+            high2_idx = half + int(np.argmax(highs_w[half:]))
+            high1, high2 = float(highs_w[high1_idx]), float(highs_w[high2_idx])
+            if high1 > 0 and abs(high1 - high2) / high1 < 0.02 and high2_idx > high1_idx:
+                mid_low = float(np.min(lows_w[high1_idx:high2_idx + 1]))
+                if mid_low < high1 * 0.98 and closes[-1] < high2:
+                    patterns.append(('double_top', 'bearish', 8))
+
+        # ── Higher Highs / Lower Lows trend detection (4 segments of 5 bars) ──
+        if len(closes) >= 20:
+            seg_len = 5
+            n = len(arr_highs)
+            base = n - 20
+            seg_highs = [float(np.max(arr_highs[base + i * seg_len:base + (i + 1) * seg_len]))
+                         for i in range(4)]
+            seg_lows = [float(np.min(arr_lows[base + i * seg_len:base + (i + 1) * seg_len]))
+                        for i in range(4)]
+
+            hh = all(seg_highs[i] > seg_highs[i - 1] for i in range(1, 4))
+            hl = all(seg_lows[i] > seg_lows[i - 1] for i in range(1, 4))
+            if hh and hl:
+                patterns.append(('uptrend_hh_hl', 'bullish', 6))
+
+            lh = all(seg_highs[i] < seg_highs[i - 1] for i in range(1, 4))
+            ll = all(seg_lows[i] < seg_lows[i - 1] for i in range(1, 4))
+            if lh and ll:
+                patterns.append(('downtrend_lh_ll', 'bearish', 6))
+
+        return patterns
+
     def get_technical_signals(self, ticker: str) -> Optional[Dict]:
         """Get latest technical signals for a ticker."""
         rows = self.db.query("""
