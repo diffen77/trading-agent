@@ -1,6 +1,5 @@
 #!/bin/bash
 BASE_URL=${1:-https://trading.lediff.se}
-AUTH=${SMOKE_AUTH:-}
 FAILED=0
 
 echo "🔥 Smoke test: $BASE_URL"
@@ -8,9 +7,7 @@ echo "================================"
 
 check_url() {
     local url="$1"
-    local auth_flag=""
-    [ -n "$AUTH" ] && auth_flag="-u $AUTH"
-    local response=$(curl -s -o /dev/null -w "%{http_code}" $auth_flag "$url")
+    local response=$(curl -s -o /dev/null -w "%{http_code}" "$url")
     if [ "$response" -eq 200 ]; then
         echo -e "\e[32m✅\e[0m $url"
     else
@@ -21,9 +18,7 @@ check_url() {
 
 check_json() {
     local url="$1"
-    local auth_flag=""
-    [ -n "$AUTH" ] && auth_flag="-u $AUTH"
-    local response=$(curl -s $auth_flag "$url")
+    local response=$(curl -s "$url")
     if echo "$response" | jq empty &> /dev/null; then
         echo -e "\e[32m✅\e[0m $url (valid JSON)"
     else
@@ -33,10 +28,10 @@ check_json() {
 }
 
 check_url "$BASE_URL"
-for route in /api/portfolio /api/health /api/positions; do
-    check_url "$BASE_URL$route"
-    check_json "$BASE_URL$route"
-done
+check_url "$BASE_URL/api/portfolio"
+check_json "$BASE_URL/api/portfolio"
+check_url "$BASE_URL/api/stocks"
+check_json "$BASE_URL/api/stocks"
 
 echo "================================"
 if [ "$FAILED" -eq 0 ]; then
