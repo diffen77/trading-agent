@@ -27,6 +27,30 @@ class Database:
         )
         self.engine = create_engine(self.database_url)
         self.Session = sessionmaker(bind=self.engine)
+        self._ensure_tables()
+    
+    def _ensure_tables(self):
+        """Ensure all required tables exist."""
+        with self.Session() as session:
+            # Create technical_signals if missing
+            session.execute(text("""
+                CREATE TABLE IF NOT EXISTS technical_signals (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(20) NOT NULL,
+                    date DATE NOT NULL,
+                    rsi DECIMAL,
+                    sma20 DECIMAL,
+                    sma50 DECIMAL,
+                    volume_ratio DECIMAL,
+                    momentum_score DECIMAL,
+                    pattern VARCHAR(50),
+                    pattern_signal VARCHAR(20),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(ticker, date)
+                )
+            """))
+            session.commit()
+            logger.debug("Ensured technical_signals table exists")
         
     def save_prices(self, df: pd.DataFrame):
         """Save price data to database."""

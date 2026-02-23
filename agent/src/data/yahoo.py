@@ -2,13 +2,20 @@
 Yahoo Finance Data Fetcher
 
 Fetches stock prices, fundamentals, and macro data for all Stockholm stocks.
+Rate-limited to avoid Yahoo blocking.
 """
 
 import yfinance as yf
 import pandas as pd
 import logging
+import time
+import random
 from typing import List, Optional
 from datetime import datetime, timedelta
+
+# Rate limiting config
+REQUEST_DELAY_MIN = 1.0  # seconds between requests
+REQUEST_DELAY_MAX = 2.0  # randomized to avoid detection
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +80,25 @@ class YahooDataFetcher:
             return None
     
     def fetch_all_prices(self, period: str = "6mo") -> pd.DataFrame:
-        """Fetch prices for all Stockholm stocks."""
-        logger.info(f"Fetching prices for {len(self.tickers)} stocks...")
+        """Fetch prices for all Stockholm stocks with rate limiting."""
+        logger.info(f"Fetching prices for {len(self.tickers)} stocks (rate-limited)...")
         
         all_data = []
-        for ticker in self.tickers:
+        for i, ticker in enumerate(self.tickers):
             try:
                 stock = yf.Ticker(ticker)
                 hist = stock.history(period=period)
                 if not hist.empty:
                     hist['ticker'] = ticker.replace('.ST', '')
                     all_data.append(hist)
+                    logger.debug(f"Fetched {ticker} ({i+1}/{len(self.tickers)})")
             except Exception as e:
                 logger.warning(f"Could not fetch {ticker}: {e}")
+            
+            # Rate limiting - sleep between requests
+            if i < len(self.tickers) - 1:
+                delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
+                time.sleep(delay)
                 
         if all_data:
             return pd.concat(all_data)
@@ -148,11 +161,15 @@ class YahooDataFetcher:
             logger.info(f"Updated {len(prices_df)} price records")
     
     def update_fundamentals(self, db):
-        """Update fundamentals for all stocks."""
-        for ticker in self.tickers:
+        """Update fundamentals for all stocks with rate limiting."""
+        for i, ticker in enumerate(self.tickers):
             fundamentals = self.fetch_fundamentals(ticker)
             if fundamentals:
                 db.save_fundamentals(fundamentals)
+            # Rate limiting
+            if i < len(self.tickers) - 1:
+                delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
+                time.sleep(delay)
         logger.info("Updated fundamentals")
     
     def update_macro_data(self, db):
