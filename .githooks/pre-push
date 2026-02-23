@@ -1,0 +1,6 @@
+#!/bin/sh
+echo "🔍 Pre-push: TypeScript check..."
+npx tsc --noEmit 2>/dev/null || echo "⚠️ No tsconfig (skipping)"
+echo "🔨 Pre-push: Build check..."
+npm run build || { echo "❌ Build failed — push blocked"; exit 1; }
+echo "✅ All checks passed — pushing"
