@@ -131,9 +131,13 @@ class NewsFetcher:
         return all_news
     
     def _fetch_rss(self, url: str, source: str) -> List[Dict]:
-        """Fetch and parse RSS feed."""
+        """Fetch and parse RSS feed with timeout."""
         try:
-            feed = feedparser.parse(url)
+            import urllib.request
+            req = urllib.request.Request(url, headers={'User-Agent': 'TradingAgent/1.0'})
+            response = urllib.request.urlopen(req, timeout=15)
+            feed_data = response.read()
+            feed = feedparser.parse(feed_data)
             articles = []
             
             for entry in feed.entries[:20]:  # Last 20 articles
