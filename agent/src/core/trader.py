@@ -12,6 +12,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
+from .notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class PaperTrader:
     
     def __init__(self, db):
         self.db = db
+        self.notifier = TelegramNotifier()
         
     def get_portfolio_value(self) -> Dict[str, Any]:
         """Calculate current portfolio value."""
@@ -250,11 +252,13 @@ class PaperTrader:
             if pnl_pct <= -5:
                 logger.warning(f"🔴 {ticker}: Stop-loss triggered ({pnl_pct:.1f}%) - EXECUTING SELL")
                 self._execute_auto_sell(ticker, shares, current_price, "Stop-loss triggered")
+                self.notifier.notify_auto_sell(ticker, shares, current_price, "Stop-loss triggered", pnl_pct)
                 
             # Check take-profit (+10%) - EXECUTE ACTUAL SELL  
             elif pnl_pct >= 10:
                 logger.info(f"🟢 {ticker}: Take-profit triggered ({pnl_pct:.1f}%) - EXECUTING SELL")
                 self._execute_auto_sell(ticker, shares, current_price, "Take-profit triggered")
+                self.notifier.notify_auto_sell(ticker, shares, current_price, "Take-profit triggered", pnl_pct)
                 
             # Implement trailing stop: vid +5%, flytta stop-loss till +2%
             elif pnl_pct >= 5:

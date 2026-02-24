@@ -10,6 +10,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+from .notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ class TradingBrain:
     def __init__(self, db):
         self.db = db
         self.backend = None  # 'ollama' or 'anthropic'
+        self.notifier = TelegramNotifier()
         
         # Try Ollama first (free, local)
         ollama_url = os.getenv("OLLAMA_URL", "http://192.168.99.19:1234")
@@ -538,6 +540,7 @@ class TradingBrain:
                     if trader.execute_trade(opp):
                         executed.append(d)
                         logger.info(f"✅ BUY {ticker} executed ({d.get('confidence')}%)")
+                        self.notifier.notify_trade(opp)
 
                 elif action == "SELL":
                     # Get current position
@@ -569,6 +572,7 @@ class TradingBrain:
                     self.db.log_trade(trade)
                     executed.append(d)
                     logger.info(f"✅ SELL {ticker} executed ({d.get('confidence')}%)")
+                    self.notifier.notify_trade(trade)
 
             except Exception as e:
                 logger.error(f"Error executing {action} {ticker}: {e}", exc_info=True)
@@ -610,6 +614,16 @@ class TradingBrain:
             f"{result['decisions_validated']} validated → "
             f"{result['decisions_executed']} executed"
         )
+
+        # Send morning briefing on deep cycle
+        if deep:
+            try:
+                pv = trader.get_portfolio_value()
+                self.notifier.notify_morning_briefing(
+                    outlook, validated, pv['total_value'], pv['pnl']
+                )
+            except Exception as e:
+                logger.error(f"Morning briefing notification error: {e}")
 
         return result
 

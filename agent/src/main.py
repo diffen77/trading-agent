@@ -36,6 +36,7 @@ from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
 from .core.brain import TradingBrain
 from .core.student import TradingStudent
+from .core.notifier import TelegramNotifier
 
 # Setup logging
 logging.basicConfig(
