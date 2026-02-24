@@ -28,6 +28,8 @@ services:
     environment:
       DATABASE_URL: postgresql://trading:${DB_PASSWORD:-trading_dev_123}@db:5432/trading_agent
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OLLAMA_URL: ${OLLAMA_URL:-http://192.168.99.19:1234}
+      SKIP_YAHOO_FETCH: ${SKIP_YAHOO_FETCH:-true}
       PYTHONUNBUFFERED: 1
     volumes:
       - ./agent:/app

@@ -186,7 +186,11 @@ class YahooDataFetcher:
         return pd.DataFrame(data)
     
     def update_all_prices(self, db):
-        """Update all prices in database."""
+        """Update all prices in database. Skip if SKIP_YAHOO_FETCH is set (data fed externally)."""
+        import os
+        if os.getenv("SKIP_YAHOO_FETCH", "").lower() in ("true", "1", "yes"):
+            logger.info("SKIP_YAHOO_FETCH enabled — skipping Yahoo fetch (data fed externally via Mac sync)")
+            return
         prices_df = self.fetch_all_prices(period="6mo")
         if not prices_df.empty:
             db.save_prices(prices_df)
@@ -194,6 +198,10 @@ class YahooDataFetcher:
     
     def update_fundamentals(self, db):
         """Update fundamentals for all stocks with rate limiting."""
+        import os
+        if os.getenv("SKIP_YAHOO_FETCH", "").lower() in ("true", "1", "yes"):
+            logger.info("SKIP_YAHOO_FETCH enabled — skipping fundamentals fetch")
+            return
         for i, ticker in enumerate(self.tickers):
             fundamentals = self.fetch_fundamentals(ticker)
             if fundamentals:
@@ -206,6 +214,10 @@ class YahooDataFetcher:
     
     def update_macro_data(self, db):
         """Update macro data in database."""
+        import os
+        if os.getenv("SKIP_YAHOO_FETCH", "").lower() in ("true", "1", "yes"):
+            logger.info("SKIP_YAHOO_FETCH enabled — skipping macro fetch")
+            return
         macro_df = self.fetch_macro()
         if not macro_df.empty:
             db.save_macro(macro_df)
