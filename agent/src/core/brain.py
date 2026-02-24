@@ -85,7 +85,7 @@ class TradingBrain:
     """AI-powered trading decision engine. Supports Ollama (free) or Anthropic."""
 
     # Ollama model (free, local) - 14B for speed, 32B too slow with large context
-    OLLAMA_MODEL = "qwen2.5:14b-instruct-q4_K_M"
+    OLLAMA_MODEL = "qwen/qwen2.5-coder-32b"
     ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 
     def __init__(self, db):
@@ -93,12 +93,12 @@ class TradingBrain:
         self.backend = None  # 'ollama' or 'anthropic'
         
         # Try Ollama first (free, local)
-        ollama_url = os.getenv("OLLAMA_URL", "http://192.168.99.176:11434")
+        ollama_url = os.getenv("OLLAMA_URL", "http://192.168.99.19:1234")
         if HAS_OPENAI:
             try:
                 self.client = OpenAI(
                     base_url=f"{ollama_url}/v1",
-                    api_key="ollama",  # Ollama doesn't need a real key
+                    api_key="lm-studio",  # LM Studio doesn't need a real key
                 )
                 self.backend = 'ollama'
                 self.model = self.OLLAMA_MODEL

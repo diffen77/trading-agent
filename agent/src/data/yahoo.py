@@ -14,8 +14,12 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 
 # Rate limiting config
-REQUEST_DELAY_MIN = 1.0  # seconds between requests
-REQUEST_DELAY_MAX = 2.0  # randomized to avoid detection
+REQUEST_DELAY_MIN = 3.0  # seconds between requests
+REQUEST_DELAY_MAX = 6.0  # randomized to avoid detection
+BATCH_SIZE = 5           # pause longer every N requests
+BATCH_PAUSE_MIN = 15.0   # longer pause between batches
+BATCH_PAUSE_MAX = 30.0
+MAX_RETRIES = 2          # retry failed fetches
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +84,11 @@ class YahooDataFetcher:
             return None
     
     def fetch_all_prices(self, period: str = "6mo") -> pd.DataFrame:
-        """Fetch prices for all Stockholm stocks with rate limiting."""
-        logger.info(f"Fetching prices for {len(self.tickers)} stocks (rate-limited)...")
+        """Fetch prices for all Stockholm stocks with rate limiting and batching."""
+        logger.info(f"Fetching prices for {len(self.tickers)} stocks (rate-limited, batch={BATCH_SIZE})...")
         
         all_data = []
+        failed = []
         for i, ticker in enumerate(self.tickers):
             try:
                 stock = yf.Ticker(ticker)
@@ -92,13 +97,40 @@ class YahooDataFetcher:
                     hist['ticker'] = ticker.replace('.ST', '')
                     all_data.append(hist)
                     logger.debug(f"Fetched {ticker} ({i+1}/{len(self.tickers)})")
+                else:
+                    failed.append(ticker)
             except Exception as e:
                 logger.warning(f"Could not fetch {ticker}: {e}")
+                failed.append(ticker)
             
-            # Rate limiting - sleep between requests
+            # Rate limiting - batch pause every BATCH_SIZE requests
             if i < len(self.tickers) - 1:
-                delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
-                time.sleep(delay)
+                if (i + 1) % BATCH_SIZE == 0:
+                    pause = random.uniform(BATCH_PAUSE_MIN, BATCH_PAUSE_MAX)
+                    logger.info(f"Batch pause {pause:.0f}s after {i+1}/{len(self.tickers)} tickers...")
+                    time.sleep(pause)
+                else:
+                    delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
+                    time.sleep(delay)
+        
+        # Retry failed tickers with longer delays
+        if failed:
+            logger.info(f"Retrying {len(failed)} failed tickers with longer delays...")
+            time.sleep(random.uniform(30, 60))
+            for i, ticker in enumerate(failed):
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        stock = yf.Ticker(ticker)
+                        hist = stock.history(period=period)
+                        if not hist.empty:
+                            hist['ticker'] = ticker.replace('.ST', '')
+                            all_data.append(hist)
+                            logger.info(f"Retry OK: {ticker} (attempt {attempt+1})")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Retry {attempt+1} failed for {ticker}: {e}")
+                    time.sleep(random.uniform(10, 20))
+                time.sleep(random.uniform(BATCH_PAUSE_MIN, BATCH_PAUSE_MAX))
                 
         if all_data:
             return pd.concat(all_data)
