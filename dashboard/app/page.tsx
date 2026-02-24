@@ -1,511 +1,307 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts'
+import { useState, useEffect, useCallback } from 'react'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-interface PortfolioData {
-  cash: number
-  positions_value: number
-  total_value: number
-  pnl: number
-  pnl_pct: number
-}
+// ── Types ──────────────────────────────────────────────────
+interface Portfolio { cash: number; positions_value: number; total_value: number; pnl: number; pnl_pct: number }
+interface Position { ticker: string; shares: number; avg_price: number; current_price: number; company_name: string; sector: string; rsi: number; confidence: number; reasoning: string; pnl_pct: number; pnl_kr: number; market_value: number; days_held: number; target_price: number; stop_loss: number }
+interface HistoryPoint { total_value: number; recorded_at: string }
+interface Macro { symbol: string; type: string; value: number; change_pct: number }
+interface Decision { id: number; decisions_json: string; timestamp: string }
+interface Performance { total_trades: number; buys: number; sells: number; winners: number; losers: number; win_rate: number; avg_win: number; avg_loss: number; total_pnl: number; best_trade: number; worst_trade: number; avg_confidence: number; open_positions: number }
 
-interface HistoryPoint {
-  total_value: number
-  recorded_at: string
-}
-
-interface Trade {
-  id: number
-  ticker: string
-  action: string
-  shares: number
-  price: number
-  total_value: number
-  reasoning: string
-  confidence: number
-  hypothesis: string
-  executed_at: string
-  pnl?: number
-  target_pct?: number
-  stop_loss_pct?: number
-  target_level?: number
-  stop_loss_level?: number
-  closed_at?: string
-  outcome?: string
-}
-
-interface Stock {
-  ticker: string
-  price: number
-  date: string
-}
-
-interface Macro {
-  symbol: string
-  type: string
-  value: number
-  change_pct: number
-}
-
-interface Prospect {
-  id: number
-  ticker: string
-  name: string
-  thesis: string
-  entry_trigger: string
-  confidence: number
-  priority: number
-  latest_price: number
-  added_at: string
-}
-
-const MACRO_NAMES: Record<string, string> = {
-  'GC=F': '🥇 Guld',
-  'BZ=F': '🛢️ Brent',
-  'HG=F': '🔶 Koppar',
-  'EURSEK=X': '€/SEK',
-  'USDSEK=X': '$/SEK',
-  '^OMX': 'OMX30',
-}
-
+const MACRO_NAMES: Record<string, string> = { 'GC=F': '🥇 Guld', 'BZ=F': '🛢️ Brent', 'HG=F': '🔶 Koppar', 'EURSEK=X': '€/SEK', 'USDSEK=X': '$/SEK', '^OMX': 'OMXS30' }
 const PERIODS = ['1D', '1W', '1M', 'YTD', '1Y'] as const
 type Period = typeof PERIODS[number]
 
+function fmt(n: number): string { return new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 }).format(n) }
+function fmtDec(n: number, d = 2): string { return new Intl.NumberFormat('sv-SE', { minimumFractionDigits: d, maximumFractionDigits: d }).format(n) }
+function pnlColor(n: number): string { return n > 0.01 ? 'text-green-400' : n < -0.01 ? 'text-red-400' : 'text-gray-400' }
+function pnlSign(n: number): string { return n > 0.01 ? '+' : '' }
+
 export default function Dashboard() {
-  const [portfolio, setPortfolio] = useState<PortfolioData | null>(null)
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
+  const [positions, setPositions] = useState<Position[]>([])
   const [history, setHistory] = useState<HistoryPoint[]>([])
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [stocks, setStocks] = useState<Stock[]>([])
   const [macro, setMacro] = useState<Macro[]>([])
-  const [prospects, setProspects] = useState<Prospect[]>([])
+  const [decisions, setDecisions] = useState<Decision[]>([])
+  const [perf, setPerf] = useState<Performance | null>(null)
+  const [period, setPeriod] = useState<Period>('1M')
+  const [lastUpdate, setLastUpdate] = useState(new Date())
   const [loading, setLoading] = useState(true)
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
-  const [selectedPeriod, setSelectedPeriod] = useState<Period>('1M')
-  
-  const prevPortfolio = useRef<PortfolioData | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     try {
-      const [portfolioRes, tradesRes, stocksRes, macroRes, prospectsRes, historyRes] = await Promise.all([
-        fetch('/api/portfolio'),
-        fetch('/api/trades'),
-        fetch('/api/stocks'),
-        fetch('/api/macro'),
-        fetch('/api/prospects'),
-        fetch(`/api/history?period=${selectedPeriod}`),
+      const [pRes, posRes, hRes, mRes, dRes, pfRes] = await Promise.all([
+        fetch('/api/portfolio'), fetch('/api/positions'), fetch(`/api/history?period=${period}`),
+        fetch('/api/macro'), fetch('/api/decisions'), fetch('/api/performance'),
       ])
-      
-      if (portfolioRes.ok) {
-        const newPortfolio = await portfolioRes.json()
-        prevPortfolio.current = portfolio
-        setPortfolio(newPortfolio)
-      }
-      if (tradesRes.ok) setTrades(await tradesRes.json())
-      if (stocksRes.ok) setStocks(await stocksRes.json())
-      if (macroRes.ok) setMacro(await macroRes.json())
-      if (prospectsRes.ok) setProspects(await prospectsRes.json())
-      if (historyRes.ok) setHistory(await historyRes.json())
-      
+      if (pRes.ok) setPortfolio(await pRes.json())
+      if (posRes.ok) setPositions(await posRes.json())
+      if (hRes.ok) setHistory(await hRes.json())
+      if (mRes.ok) setMacro(await mRes.json())
+      if (dRes.ok) setDecisions(await dRes.json())
+      if (pfRes.ok) setPerf(await pfRes.json())
       setLastUpdate(new Date())
-    } catch (error) {
-      console.error('Error fetching data:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [portfolio, selectedPeriod])
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }, [period])
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 30000)
-    return () => clearInterval(interval)
-  }, [selectedPeriod])
+  useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 30000); return () => clearInterval(iv) }, [fetchAll])
 
-  const getCurrentPrice = (ticker: string): number | null => {
-    const stock = stocks.find(s => s.ticker === ticker)
-    return stock ? parseFloat(String(stock.price)) : null
-  }
+  if (loading) return <div className="min-h-screen flex items-center justify-center bg-[#0a0a0f] text-white text-xl">Laddar...</div>
 
-  // Calculate period performance
-  const periodPerformance = () => {
-    if (history.length < 2) return { pnl: 0, pnlPct: 0 }
-    const start = parseFloat(String(history[0]?.total_value || 20000))
-    const end = parseFloat(String(portfolio?.total_value || start))
-    const pnl = end - start
-    const pnlPct = ((end / start) - 1) * 100
-    return { pnl, pnlPct }
-  }
-
-  const { pnl: periodPnl, pnlPct: periodPnlPct } = periodPerformance()
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-black text-white">
-        <div className="text-xl">Laddar...</div>
-      </div>
-    )
-  }
-
-  const headerMacro = macro.filter(m => 
-    ['GC=F', 'BZ=F', 'HG=F', 'EURSEK=X', 'USDSEK=X', '^OMX'].includes(m.symbol)
-  )
-
-  // Prepare chart data
-  const chartData = history.map(h => ({
-    date: new Date(h.recorded_at).toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' }),
-    value: parseFloat(String(h.total_value)),
-  }))
-
-  // Add current value if different from last history point
-  if (portfolio && chartData.length > 0) {
-    const lastHistoryValue = chartData[chartData.length - 1].value
-    const currentValue = parseFloat(String(portfolio.total_value))
-    if (Math.abs(currentValue - lastHistoryValue) > 1) {
-      chartData.push({
-        date: 'Nu',
-        value: currentValue,
-      })
-    }
-  }
-
-  const isPositivePeriod = periodPnlPct >= 0
+  const p = portfolio || { cash: 20000, positions_value: 0, total_value: 20000, pnl: 0, pnl_pct: 0 }
+  const pf = perf || { total_trades: 0, win_rate: 0, avg_confidence: 0, open_positions: 0, total_pnl: 0, buys: 0, sells: 0, winners: 0, losers: 0, avg_win: 0, avg_loss: 0, best_trade: 0, worst_trade: 0 }
+  const chartData = history.map(h => ({ date: new Date(h.recorded_at).toLocaleDateString('sv-SE', { day: 'numeric', month: 'short' }), value: parseFloat(String(h.total_value)) }))
+  const isUp = p.pnl_pct >= 0
+  const color = isUp ? '#22c55e' : '#ef4444'
 
   return (
-    <main className="min-h-screen bg-black text-white">
-      {/* Macro Header Bar */}
-      <header className="border-b border-gray-800 px-4 py-2">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <h1 className="text-xl font-bold">Trading Agent</h1>
-          <div className="flex gap-4 text-xs">
-            {headerMacro.map(m => (
-              <MacroChip key={m.symbol} item={m} />
-            ))}
+    <main className="min-h-screen bg-[#0a0a0f] text-white">
+      {/* ── Macro Bar ── */}
+      <header className="border-b border-gray-800/50 px-4 py-2 overflow-x-auto">
+        <div className="max-w-[1400px] mx-auto flex items-center gap-6">
+          <h1 className="text-lg font-bold whitespace-nowrap">📈 Trading Agent</h1>
+          <div className="flex gap-5 text-xs">
+            {macro.filter(m => MACRO_NAMES[m.symbol]).map(m => {
+              const ch = parseFloat(String(m.change_pct))
+              return (
+                <div key={m.symbol} className="flex items-center gap-1 whitespace-nowrap">
+                  <span className="text-gray-500">{MACRO_NAMES[m.symbol]}</span>
+                  <span className="font-medium">{fmtDec(parseFloat(String(m.value)), m.type === 'currency' ? 2 : 0)}</span>
+                  <span className={ch >= 0 ? 'text-green-400' : 'text-red-400'}>{ch >= 0 ? '↑' : '↓'}{Math.abs(ch).toFixed(1)}%</span>
+                </div>
+              )
+            })}
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto p-8">
-        {/* Hero Portfolio Section with Chart */}
-        <section className="mb-12">
-          <div className="bg-gray-900 rounded-3xl p-8">
-            {/* Top row: Value and Period selector */}
-            <div className="flex justify-between items-start mb-6">
+      <div className="max-w-[1400px] mx-auto p-6 space-y-6">
+        {/* ── Row 1: Chart + Performance ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Portfolio Chart */}
+          <div className="lg:col-span-2 bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+            <div className="flex justify-between items-start mb-4">
               <div>
-                <div className="text-gray-500 text-sm mb-1">Totalt värde</div>
-                <div className="text-5xl font-bold tracking-tight">
-                  {formatCurrency(portfolio?.total_value || 20000)} <span className="text-2xl text-gray-500">SEK</span>
-                </div>
-                <div className={`text-lg mt-2 ${isPositivePeriod ? 'text-green-500' : 'text-red-500'}`}>
-                  {isPositivePeriod ? '+' : ''}{periodPnlPct.toFixed(2)}% 
-                  <span className="text-gray-500 ml-2">
-                    ({isPositivePeriod ? '+' : ''}{formatCurrency(periodPnl)} kr)
-                  </span>
+                <div className="text-gray-500 text-sm">Portföljvärde</div>
+                <div className="text-4xl font-bold">{fmt(p.total_value)} <span className="text-xl text-gray-600">SEK</span></div>
+                <div className={`text-sm mt-1 ${pnlColor(p.pnl_pct)}`}>
+                  {pnlSign(p.pnl_pct)}{fmtDec(p.pnl_pct)}% ({pnlSign(p.pnl)}{fmt(p.pnl)} kr)
                 </div>
               </div>
-              
-              {/* Period Selector */}
-              <div className="flex gap-1 bg-gray-800 rounded-xl p-1">
-                {PERIODS.map(period => (
-                  <button
-                    key={period}
-                    onClick={() => setSelectedPeriod(period)}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      selectedPeriod === period 
-                        ? 'bg-white text-black' 
-                        : 'text-gray-400 hover:text-white'
-                    }`}
-                  >
-                    {period}
+              <div className="flex gap-1 bg-gray-800/50 rounded-lg p-1">
+                {PERIODS.map(pr => (
+                  <button key={pr} onClick={() => setPeriod(pr)}
+                    className={`px-3 py-1.5 rounded text-xs font-medium transition ${period === pr ? 'bg-white text-black' : 'text-gray-500 hover:text-white'}`}>
+                    {pr}
                   </button>
                 ))}
               </div>
             </div>
-
-            {/* Chart */}
-            <div className="h-64 mt-4">
+            <div className="h-48">
               {chartData.length > 1 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                        <stop 
-                          offset="5%" 
-                          stopColor={isPositivePeriod ? '#22c55e' : '#ef4444'} 
-                          stopOpacity={0.3}
-                        />
-                        <stop 
-                          offset="95%" 
-                          stopColor={isPositivePeriod ? '#22c55e' : '#ef4444'} 
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <XAxis 
-                      dataKey="date" 
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: '#6b7280', fontSize: 12 }}
-                    />
-                    <YAxis 
-                      domain={['dataMin - 500', 'dataMax + 500']}
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: '#6b7280', fontSize: 12 }}
-                      tickFormatter={(v) => `${(v/1000).toFixed(0)}k`}
-                    />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: '#1f2937', 
-                        border: 'none', 
-                        borderRadius: '12px',
-                        padding: '12px'
-                      }}
-                      labelStyle={{ color: '#9ca3af' }}
-                      formatter={(value: number) => [`${formatCurrency(value)} SEK`, 'Värde']}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="value"
-                      stroke={isPositivePeriod ? '#22c55e' : '#ef4444'}
-                      strokeWidth={2}
-                      fillOpacity={1}
-                      fill="url(#colorValue)"
-                    />
+                    <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={color} stopOpacity={0.3}/><stop offset="95%" stopColor={color} stopOpacity={0}/></linearGradient></defs>
+                    <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#4b5563', fontSize: 11 }}/>
+                    <YAxis domain={['dataMin - 500', 'dataMax + 500']} axisLine={false} tickLine={false} tick={{ fill: '#4b5563', fontSize: 11 }} tickFormatter={v => `${(v/1000).toFixed(0)}k`}/>
+                    <Tooltip contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px' }} formatter={(v: number) => [`${fmt(v)} SEK`, 'Värde']}/>
+                    <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2} fill="url(#grad)"/>
                   </AreaChart>
                 </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center text-gray-500">
-                  <div className="text-center">
-                    <div className="text-4xl mb-2">📊</div>
-                    <div>Graf visas när mer data finns</div>
-                  </div>
-                </div>
-              )}
+              ) : <div className="h-full flex items-center justify-center text-gray-600">📊 Grafdata byggs upp...</div>}
             </div>
-
-            {/* Stats row */}
-            <div className="grid grid-cols-3 gap-6 mt-8 pt-6 border-t border-gray-800">
-              <div>
-                <div className="text-gray-500 text-sm">Kontanter</div>
-                <div className="text-2xl font-semibold">{formatCurrency(portfolio?.cash || 20000)}</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-sm">Investerat</div>
-                <div className="text-2xl font-semibold">{formatCurrency(portfolio?.positions_value || 0)}</div>
-              </div>
-              <div>
-                <div className="text-gray-500 text-sm">Total avkastning</div>
-                <div className={`text-2xl font-semibold ${(portfolio?.pnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {(portfolio?.pnl || 0) >= 0 ? '+' : ''}{formatCurrency(portfolio?.pnl || 0)}
-                </div>
-              </div>
+            <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-800/50 text-sm">
+              <div><span className="text-gray-500">Kontanter</span><div className="text-lg font-semibold">{fmt(p.cash)}</div></div>
+              <div><span className="text-gray-500">Investerat</span><div className="text-lg font-semibold">{fmt(p.positions_value)}</div></div>
+              <div><span className="text-gray-500">Avkastning</span><div className={`text-lg font-semibold ${pnlColor(p.pnl)}`}>{pnlSign(p.pnl)}{fmt(p.pnl)} kr</div></div>
             </div>
           </div>
-        </section>
 
-        {/* Trades */}
-        <section className="mb-12">
-          <h2 className="text-2xl font-semibold mb-6">Positioner & Trades</h2>
-          {trades.length === 0 ? (
-            <div className="bg-gray-900 rounded-2xl p-8 text-center">
-              <p className="text-gray-500">Inga trades ännu.</p>
-            </div>
-          ) : (
+          {/* Performance Stats */}
+          <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+            <h2 className="text-sm text-gray-500 mb-4 uppercase tracking-wider">Performance</h2>
             <div className="space-y-4">
-              {trades.map((trade) => (
-                <TradeCard 
-                  key={trade.id} 
-                  trade={trade} 
-                  currentPrice={getCurrentPrice(trade.ticker)}
-                />
-              ))}
+              <StatRow label="Öppna positioner" value={`${pf.open_positions}`} />
+              <StatRow label="Totala trades" value={`${pf.total_trades}`} />
+              <StatRow label="Win rate" value={pf.win_rate > 0 ? `${fmtDec(pf.win_rate, 0)}%` : '–'} color={pf.win_rate >= 50 ? 'text-green-400' : pf.win_rate > 0 ? 'text-red-400' : ''} />
+              <StatRow label="Vinnare / Förlorare" value={`${pf.winners}W / ${pf.losers}L`} />
+              <StatRow label="Avg confidence" value={pf.avg_confidence > 0 ? `${fmtDec(pf.avg_confidence, 0)}%` : '–'} />
+              <StatRow label="Total P&L" value={`${pnlSign(pf.total_pnl)}${fmt(pf.total_pnl)} kr`} color={pnlColor(pf.total_pnl)} />
+              <div className="pt-3 border-t border-gray-800/50">
+                <StatRow label="Mål" value="20k → 40k (31 juli)" />
+                <div className="mt-2 bg-gray-800 rounded-full h-2 overflow-hidden">
+                  <div className="bg-green-500 h-full rounded-full transition-all" style={{ width: `${Math.min(100, Math.max(0, ((p.total_value - 20000) / 20000) * 100))}%` }}/>
+                </div>
+                <div className="text-xs text-gray-600 mt-1">{fmtDec(Math.max(0, ((p.total_value - 20000) / 20000) * 100), 1)}% av målet</div>
+              </div>
             </div>
-          )}
-        </section>
-
-        {/* Prospects / Watchlist */}
-        <section className="mb-12">
-          <h2 className="text-2xl font-semibold mb-6">🎯 Prospects</h2>
-          {prospects.length === 0 ? (
-            <div className="bg-gray-900 rounded-2xl p-8 text-center">
-              <p className="text-gray-500">Ingen watchlist.</p>
-            </div>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              {prospects.map((prospect) => (
-                <ProspectCard key={prospect.id} prospect={prospect} />
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Status */}
-        <section>
-          <div className="flex items-center gap-3 text-sm text-gray-500">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span>Agent aktiv · Uppdaterad {lastUpdate.toLocaleTimeString('sv-SE')}</span>
           </div>
-        </section>
+        </div>
+
+        {/* ── Row 2: Positions ── */}
+        <div>
+          <h2 className="text-lg font-semibold mb-3">Positioner ({positions.length})</h2>
+          {positions.length === 0 ? (
+            <div className="bg-gray-900/50 rounded-2xl p-8 text-center text-gray-600 border border-gray-800/50">Inga öppna positioner</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {positions.map(pos => <PositionCard key={pos.ticker} pos={pos} />)}
+            </div>
+          )}
+        </div>
+
+        {/* ── Row 3: Decisions + Info ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* AI Decisions */}
+          <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+            <h2 className="text-sm text-gray-500 mb-4 uppercase tracking-wider">🧠 AI Beslut</h2>
+            {decisions.length === 0 ? (
+              <div className="text-gray-600 text-center py-4">Inga beslut ännu</div>
+            ) : (
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {decisions.slice(0, 8).map(d => <DecisionCard key={d.id} decision={d} />)}
+              </div>
+            )}
+          </div>
+
+          {/* Agent Info */}
+          <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800/50">
+            <h2 className="text-sm text-gray-500 mb-4 uppercase tracking-wider">📋 Agent Info</h2>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">Modell</span><span>qwen2.5-coder-32b</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Startkapital</span><span>20 000 SEK</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Mål</span><span>40 000 SEK (31 juli 2026)</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Strategi</span><span>TA + AI-analys</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Max positioner</span><span>5</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Stop-loss</span><span>-5%</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Take-profit</span><span>+10%</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Min confidence</span><span>55%</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Datakällor</span><span>Yahoo Finance + RSS</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Brain cycle</span><span>Var 30 min (08-16 UTC)</span></div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Footer ── */}
+        <div className="flex items-center gap-2 text-xs text-gray-600 pt-4">
+          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"/>
+          <span>Agent aktiv · Uppdaterad {lastUpdate.toLocaleTimeString('sv-SE')}</span>
+        </div>
       </div>
     </main>
   )
 }
 
-function MacroChip({ item }: { item: Macro }) {
-  const name = MACRO_NAMES[item.symbol] || item.symbol
-  const changePct = parseFloat(String(item.change_pct))
-  const isPositive = changePct >= 0
-  
+// ── Components ──────────────────────────────────────────────
+
+function StatRow({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="flex items-center gap-1">
-      <span className="text-gray-500">{name}</span>
-      <span className="font-medium">
-        {parseFloat(String(item.value)).toFixed(item.type === 'currency' ? 2 : 0)}
-      </span>
-      <span className={isPositive ? 'text-green-500' : 'text-red-500'}>
-        {isPositive ? '↑' : '↓'}{Math.abs(changePct).toFixed(1)}%
-      </span>
+    <div className="flex justify-between items-center">
+      <span className="text-gray-500 text-sm">{label}</span>
+      <span className={`font-medium ${color || ''}`}>{value}</span>
     </div>
   )
 }
 
-function TradeCard({ trade, currentPrice }: { trade: Trade, currentPrice: number | null }) {
-  const isBuy = trade.action === 'BUY'
-  const entryPrice = parseFloat(String(trade.price))
-  const shares = parseFloat(String(trade.shares))
-  const totalValue = parseFloat(String(trade.total_value))
-  const confidence = trade.confidence ? parseFloat(String(trade.confidence)) : null
-  
-  const currentValue = currentPrice ? shares * currentPrice : null
-  const pnlKr = currentValue ? currentValue - totalValue : null
-  const pnlPct = currentValue ? ((currentValue / totalValue) - 1) * 100 : null
-  const isProfit = pnlKr !== null && pnlKr >= 0
-  
-  return (
-    <div className="bg-gray-900 rounded-2xl p-6">
-      <div className="flex justify-between items-start mb-4">
-        <div className="flex items-center gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                isBuy ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'
-              }`}>
-                {trade.action}
-              </span>
-              <span className="text-xl font-bold">{trade.ticker}</span>
-            </div>
-            <div className="text-sm text-gray-500 mt-1">
-              {shares.toFixed(0)} st · {new Date(trade.executed_at).toLocaleDateString('sv-SE')}
-            </div>
-          </div>
-        </div>
-        
-        <div className="text-right">
-          <div className="flex items-center gap-4 text-sm">
-            <div>
-              <div className="text-gray-500">Köpt</div>
-              <div className="font-medium">{entryPrice.toFixed(2)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">Nu</div>
-              <div className="font-medium">{currentPrice?.toFixed(2) || '-'}</div>
-            </div>
-            <div>
-              <div className="text-gray-500">P&L</div>
-              <div className={`font-bold ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
-                {pnlPct !== null ? `${isProfit ? '+' : ''}${pnlPct.toFixed(1)}%` : '-'}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-500">&nbsp;</div>
-              <div className={`font-medium ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
-                {pnlKr !== null ? `${isProfit ? '+' : ''}${pnlKr.toFixed(0)} kr` : '-'}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <div className="border-t border-gray-800 pt-4 mt-2">
-        <div className="text-sm text-gray-300">{trade.reasoning}</div>
-        {trade.hypothesis && (
-          <div className="text-sm text-gray-500 mt-2">
-            <strong>Hypotes:</strong> {trade.hypothesis}
-          </div>
-        )}
-        <div className="flex items-center gap-3 mt-3">
-          {confidence && (
-            <span className="px-2 py-0.5 bg-gray-800 rounded text-xs text-gray-400">
-              Confidence: {confidence.toFixed(0)}%
-            </span>
-          )}
-          {trade.stop_loss_level && (
-            <span className="px-2 py-0.5 bg-red-900/50 rounded text-xs text-red-400">
-              Stop-loss: {parseFloat(String(trade.stop_loss_level)).toFixed(2)} ({trade.stop_loss_pct}%)
-            </span>
-          )}
-          {trade.target_level && (
-            <span className="px-2 py-0.5 bg-green-900/50 rounded text-xs text-green-400">
-              Target: {parseFloat(String(trade.target_level)).toFixed(2)} ({trade.target_pct && '+' + trade.target_pct}%)
-            </span>
-          )}
-          {trade.closed_at && (
-            <span className="px-2 py-0.5 bg-yellow-900/50 rounded text-xs text-yellow-400">
-              Stängd: {new Date(trade.closed_at).toLocaleDateString('sv-SE')}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
+function PositionCard({ pos }: { pos: Position }) {
+  const pnl = parseFloat(String(pos.pnl_pct)) || 0
+  const pnlKr = parseFloat(String(pos.pnl_kr)) || 0
+  const rsi = parseFloat(String(pos.rsi)) || 50
+  const conf = parseFloat(String(pos.confidence)) || 0
+  const target = parseFloat(String(pos.target_price)) || 0
+  const sl = parseFloat(String(pos.stop_loss)) || 0
+  const current = parseFloat(String(pos.current_price)) || 0
+  const entry = parseFloat(String(pos.avg_price)) || 0
 
-function ProspectCard({ prospect }: { prospect: Prospect }) {
-  const confidence = prospect.confidence ? parseFloat(String(prospect.confidence)) : 0
-  const price = prospect.latest_price ? parseFloat(String(prospect.latest_price)) : null
-  
-  const priorityColors: Record<number, string> = {
-    1: 'bg-green-900 text-green-300',
-    2: 'bg-blue-900 text-blue-300',
-    3: 'bg-yellow-900 text-yellow-300',
-    4: 'bg-gray-800 text-gray-300',
-    5: 'bg-gray-800 text-gray-400',
-  }
-  
+  // Progress between stop_loss and target
+  const range = target - sl
+  const progress = range > 0 ? Math.min(100, Math.max(0, ((current - sl) / range) * 100)) : 50
+
   return (
-    <div className="bg-gray-900 rounded-2xl p-5">
+    <div className="bg-gray-900/80 rounded-xl p-4 border border-gray-800/50 hover:border-gray-700/50 transition">
       <div className="flex justify-between items-start mb-3">
-        <div className="flex items-center gap-2">
-          <span className={`px-2 py-0.5 rounded text-xs font-medium ${priorityColors[prospect.priority] || priorityColors[5]}`}>
-            #{prospect.priority}
-          </span>
-          <span className="text-lg font-bold">{prospect.ticker}</span>
-          <span className="text-gray-500 text-sm">{prospect.name}</span>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-bold">{pos.ticker}</span>
+            {pos.sector && <span className="text-[10px] px-1.5 py-0.5 bg-gray-800 rounded text-gray-400">{pos.sector}</span>}
+          </div>
+          {pos.company_name && <div className="text-xs text-gray-600">{pos.company_name}</div>}
         </div>
         <div className="text-right">
-          <div className="text-sm text-gray-500">Pris</div>
-          <div className="font-medium">{price?.toFixed(2) || '-'}</div>
+          <div className={`text-lg font-bold ${pnlColor(pnl)}`}>{pnlSign(pnl)}{fmtDec(pnl)}%</div>
+          <div className={`text-xs ${pnlColor(pnlKr)}`}>{pnlSign(pnlKr)}{fmt(pnlKr)} kr</div>
         </div>
       </div>
-      
-      <p className="text-sm text-gray-300 mb-3">{prospect.thesis}</p>
-      
-      <div className="flex items-center justify-between text-xs">
-        <div className="text-gray-500">
-          <strong>Entry:</strong> {prospect.entry_trigger}
+
+      <div className="grid grid-cols-3 gap-2 text-xs mb-3">
+        <div><span className="text-gray-600">Köpt</span><div>{fmtDec(entry)}</div></div>
+        <div><span className="text-gray-600">Nu</span><div>{fmtDec(current)}</div></div>
+        <div><span className="text-gray-600">Värde</span><div>{fmt(parseFloat(String(pos.market_value)))} kr</div></div>
+      </div>
+
+      {/* Price progress bar */}
+      {target > 0 && sl > 0 && (
+        <div className="mb-3">
+          <div className="flex justify-between text-[10px] text-gray-600 mb-0.5">
+            <span>SL {fmtDec(sl)}</span>
+            <span>Target {fmtDec(target)}</span>
+          </div>
+          <div className="bg-gray-800 rounded-full h-1.5 overflow-hidden">
+            <div className={`h-full rounded-full transition-all ${pnl >= 0 ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${progress}%` }}/>
+          </div>
         </div>
-        <div className="px-2 py-0.5 bg-gray-800 rounded text-gray-400">
-          {confidence.toFixed(0)}% confidence
-        </div>
+      )}
+
+      <div className="flex items-center gap-2 text-[10px]">
+        {conf > 0 && <span className="px-1.5 py-0.5 bg-blue-900/30 text-blue-400 rounded">{fmtDec(conf, 0)}% conf</span>}
+        <RSIBadge rsi={rsi} />
+        {pos.days_held != null && <span className="text-gray-600">{pos.days_held}d</span>}
+        <span className="text-gray-600">{parseFloat(String(pos.shares)).toFixed(1)} st</span>
       </div>
     </div>
   )
 }
 
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('sv-SE', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value)
+function RSIBadge({ rsi }: { rsi: number }) {
+  const color = rsi > 70 ? 'bg-red-900/30 text-red-400' : rsi < 30 ? 'bg-green-900/30 text-green-400' : 'bg-gray-800 text-gray-500'
+  const label = rsi > 70 ? 'Överköpt' : rsi < 30 ? 'Översåld' : 'RSI'
+  return <span className={`px-1.5 py-0.5 rounded ${color}`}>{label} {fmtDec(rsi, 0)}</span>
+}
+
+function DecisionCard({ decision }: { decision: Decision }) {
+  let parsed: any = {}
+  try {
+    parsed = typeof decision.decisions_json === 'string' ? JSON.parse(decision.decisions_json) : decision.decisions_json
+  } catch { return null }
+
+  const outlook = parsed.market_outlook || 'neutral'
+  const decs = parsed.decisions || []
+  const outlookColor = outlook === 'bullish' ? 'bg-green-900/30 text-green-400' : outlook === 'bearish' ? 'bg-red-900/30 text-red-400' : 'bg-gray-800 text-gray-400'
+  const time = new Date(decision.timestamp).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+  const date = new Date(decision.timestamp).toLocaleDateString('sv-SE')
+
+  return (
+    <div className="border-b border-gray-800/50 pb-3 last:border-0">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-xs text-gray-600">{date} {time}</span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${outlookColor}`}>{outlook}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {decs.slice(0, 6).map((d: any, i: number) => {
+          const action = (d.action || '').toUpperCase()
+          const actionColor = action === 'BUY' ? 'text-green-400' : action === 'SELL' ? 'text-red-400' : 'text-gray-400'
+          return (
+            <span key={i} className="text-xs bg-gray-800/50 px-2 py-0.5 rounded">
+              <span className={actionColor}>{action}</span> {d.ticker} <span className="text-gray-600">{d.confidence}%</span>
+            </span>
+          )
+        })}
+      </div>
+      {parsed.analysis_summary && <div className="text-xs text-gray-600 mt-1 line-clamp-2">{parsed.analysis_summary}</div>}
+    </div>
+  )
 }
