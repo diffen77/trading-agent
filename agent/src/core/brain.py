@@ -504,6 +504,29 @@ class TradingBrain:
                 if ticker not in current_tickers:
                     logger.info(f"🚫 {ticker} SELL rejected: not in portfolio")
                     continue
+
+                # Rule: minimum holding period - don't sell same day as buy
+                buy_trade = self.db.query("""
+                    SELECT executed_at FROM trades 
+                    WHERE ticker = :ticker AND action = 'BUY' 
+                    ORDER BY executed_at DESC LIMIT 1
+                """, {'ticker': ticker})
+                if buy_trade:
+                    from datetime import datetime, timedelta
+                    buy_time = buy_trade[0]['executed_at']
+                    if isinstance(buy_time, str):
+                        buy_time = datetime.fromisoformat(buy_time.replace('Z', '+00:00')).replace(tzinfo=None)
+                    hours_held = (datetime.now() - buy_time).total_seconds() / 3600
+                    if hours_held < 24:
+                        logger.info(f"🚫 {ticker} SELL rejected: only held {hours_held:.1f}h (min 24h)")
+                        continue
+
+                # Rule: only sell on bearish outlook or stop-loss, not just neutral
+                outlook = decisions.get("market_outlook", "neutral")
+                if outlook != "bearish" and confidence < 80:
+                    logger.info(f"🚫 {ticker} SELL rejected: outlook={outlook}, confidence={confidence}% (need bearish or conf≥80%)")
+                    continue
+
                 validated.append(d)
 
         # Check cash ratio - warn if too much cash sitting idle
