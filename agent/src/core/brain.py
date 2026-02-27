@@ -86,7 +86,7 @@ class TradingBrain:
     """AI-powered trading decision engine. Supports Ollama (free) or Anthropic."""
 
     # Ollama model (free, local) - 14B for speed, 32B too slow with large context
-    OLLAMA_MODEL = "qwen/qwen2.5-coder-32b"
+    OLLAMA_MODEL = "qwen/qwen2.5-coder-14b"
     ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 
     def __init__(self, db):
