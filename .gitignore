@@ -43,3 +43,13 @@ Thumbs.db
 *.pem
 *.key
 .env
+# Cortex local storage
+.context/db/
+.context/embeddings/
+.context/cache/
+.context/plan/
+.context/hooks/
+.npm-cache/
+mcp/.npm-cache/
+mcp/dist/
+mcp/node_modules/
