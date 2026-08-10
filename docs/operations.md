@@ -4,7 +4,7 @@
 
 En frisk deployment betyder inte att agenten får handla.
 
-- `readiness` kräver schema 44 eller nyare, exakt en balansrad, att portföljantal
+- `readiness` kräver schema 45 eller nyare, exakt en balansrad, att portföljantal
   stämmer med öppna FIFO-lots, en hashverifierad aktiv strategi och
   aktuell officiell XSTO-kalender.
 - `trading-readiness` kräver dessutom minst 300 aktiva XSTO-instrument,
@@ -52,7 +52,7 @@ transaktionstid inte ett falskt `NOT_READY`-fönster.
 
 Monitorprocessen larmar på:
 
-- avvisad eller otillgänglig schema 44-migrering;
+- avvisad eller otillgänglig schema 45-migrering;
 - ledgerfel, inklusive avvikelse mellan portfölj och öppna FIFO-lots;
 - stale eller ofullständig XSTO-data först 25 minuter efter öppning
   (högst 15 minuters feedfördröjning plus 10 minuters larmfönster);

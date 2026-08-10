@@ -5,6 +5,7 @@ import pytest
 from src.benchmark_admin import (
     _load_json_object,
     _parser,
+    build_benchmark_readiness,
     incident_from_mapping,
     registration_from_mapping,
 )
@@ -86,3 +87,33 @@ def test_json_loader_rejects_non_object_and_large_input(tmp_path):
     )
     with pytest.raises(ValueError):
         _load_json_object(str(large_path))
+
+
+def test_benchmark_readiness_is_fail_closed_and_actionable():
+    result = build_benchmark_readiness({
+        "strategy_version": "momentum-report-swing-v1",
+        "strategy_config_hash": "1" * 64,
+        "reference_snapshot_id": 7,
+        "reference_instrument_count": 416,
+        "reference_checksum_sha256": "2" * 64,
+        "quote_contract_key": None,
+        "top_of_book_contract_key": "public-pretrade-v1",
+        "benchmark_contract_key": None,
+        "benchmark_level_id": None,
+        "ledger_clean": False,
+        "active_experiment_key": None,
+        "active_experiment_status": None,
+    })
+
+    assert result["system_ready_for_start"] is False
+    assert result["blockers"] == [
+        "BENCHMARK_QUOTE_PROVIDER_NOT_READY",
+        "OMXSGI_PROVIDER_NOT_READY",
+        "OMXSGI_LEVEL_MISSING",
+        "PAPER_LEDGER_NOT_CLEAN",
+    ]
+    assert result["execution_options"] == [
+        "TOP_OF_BOOK_PLUS_SLIPPAGE",
+    ]
+    assert result["operator_inputs"]
+    assert _parser().parse_args(["readiness"]).command == "readiness"

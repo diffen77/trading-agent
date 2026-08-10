@@ -316,10 +316,10 @@ class Database:
             version = session.execute(
                 text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
             ).scalar_one()
-            if version < 43:
+            if version < 45:
                 raise RuntimeError(
                     f"Database schema is too old (version {version}); "
-                    "version 43 is required"
+                    "version 45 is required"
                 )
 
     def upsert_instruments(

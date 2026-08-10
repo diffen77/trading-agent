@@ -432,6 +432,176 @@ class BenchmarkAdmin:
                     )
                 return dict(row)
 
+    def get_readiness(self) -> dict[str, Any]:
+        """Report benchmark prerequisites without changing runtime state."""
+        with self._connect() as connection:
+            connection.set_session(readonly=True)
+            with connection.cursor(
+                cursor_factory=RealDictCursor,
+            ) as cursor:
+                cursor.execute(
+                    """
+                    WITH latest_reference AS (
+                        SELECT
+                            id,
+                            instrument_count,
+                            universe_checksum_sha256
+                        FROM reference_data_snapshots
+                        WHERE mic = 'XSTO'
+                        ORDER BY snapshot_date DESC, id DESC
+                        LIMIT 1
+                    ),
+                    active_strategy AS (
+                        SELECT version, config_hash
+                        FROM strategy_versions
+                        WHERE status = 'ACTIVE'
+                        ORDER BY activated_at DESC NULLS LAST, id DESC
+                        LIMIT 1
+                    ),
+                    ready_quote AS (
+                        SELECT contract.contract_key
+                        FROM market_data_provider_contracts contract
+                        CROSS JOIN latest_reference reference
+                        JOIN LATERAL (
+                            SELECT candidate.*
+                            FROM market_data_provider_validations candidate
+                            WHERE candidate.contract_id = contract.id
+                            ORDER BY
+                                candidate.validated_at DESC,
+                                candidate.id DESC
+                            LIMIT 1
+                        ) validation ON TRUE
+                        WHERE paper_benchmark_provider_evidence_ready(
+                            contract.id,
+                            reference.instrument_count,
+                            ARRAY[
+                                'delayed-post-trade-equity',
+                                'realtime-equity-level-1'
+                            ]
+                        )
+                          AND validation.reference_snapshot_id = reference.id
+                          AND validation.reference_checksum_sha256 =
+                                reference.universe_checksum_sha256
+                        ORDER BY contract.updated_at DESC, contract.id DESC
+                        LIMIT 1
+                    ),
+                    ready_top_of_book AS (
+                        SELECT contract.contract_key
+                        FROM market_data_provider_contracts contract
+                        CROSS JOIN latest_reference reference
+                        JOIN LATERAL (
+                            SELECT candidate.*
+                            FROM market_data_provider_validations candidate
+                            WHERE candidate.contract_id = contract.id
+                            ORDER BY
+                                candidate.validated_at DESC,
+                                candidate.id DESC
+                            LIMIT 1
+                        ) validation ON TRUE
+                        WHERE paper_benchmark_provider_evidence_ready(
+                            contract.id,
+                            reference.instrument_count,
+                            ARRAY[
+                                'delayed-pre-trade-equity',
+                                'realtime-equity-level-1'
+                            ]
+                        )
+                          AND validation.reference_snapshot_id = reference.id
+                          AND validation.reference_checksum_sha256 =
+                                reference.universe_checksum_sha256
+                        ORDER BY contract.updated_at DESC, contract.id DESC
+                        LIMIT 1
+                    ),
+                    ready_benchmark AS (
+                        SELECT contract.id, contract.contract_key
+                        FROM market_data_provider_contracts contract
+                        WHERE paper_benchmark_provider_evidence_ready(
+                            contract.id,
+                            1,
+                            ARRAY[
+                                'delayed-index-level',
+                                'realtime-index-level'
+                            ]
+                        )
+                        ORDER BY contract.updated_at DESC, contract.id DESC
+                        LIMIT 1
+                    ),
+                    latest_benchmark_level AS (
+                        SELECT level.id, level.event_time, level.received_at
+                        FROM market_index_levels level
+                        JOIN ready_benchmark contract
+                          ON contract.id = level.provider_contract_id
+                        WHERE level.symbol = 'OMXSGI'
+                          AND level.mic = 'XSTO'
+                          AND level.received_at <= NOW()
+                        ORDER BY level.event_time DESC, level.id DESC
+                        LIMIT 1
+                    ),
+                    active_experiment AS (
+                        SELECT experiment_key, status
+                        FROM paper_benchmark_experiments
+                        WHERE status IN (
+                            'DRAFT', 'APPROVED', 'RUNNING', 'PAUSED'
+                        )
+                        ORDER BY
+                            CASE status
+                                WHEN 'RUNNING' THEN 0
+                                WHEN 'PAUSED' THEN 1
+                                WHEN 'APPROVED' THEN 2
+                                ELSE 3
+                            END,
+                            id DESC
+                        LIMIT 1
+                    )
+                    SELECT
+                        (SELECT version FROM active_strategy)
+                            AS strategy_version,
+                        (SELECT config_hash FROM active_strategy)
+                            AS strategy_config_hash,
+                        (SELECT id FROM latest_reference)
+                            AS reference_snapshot_id,
+                        (SELECT instrument_count FROM latest_reference)
+                            AS reference_instrument_count,
+                        (SELECT universe_checksum_sha256
+                         FROM latest_reference)
+                            AS reference_checksum_sha256,
+                        (SELECT contract_key FROM ready_quote)
+                            AS quote_contract_key,
+                        (SELECT contract_key FROM ready_top_of_book)
+                            AS top_of_book_contract_key,
+                        (SELECT contract_key FROM ready_benchmark)
+                            AS benchmark_contract_key,
+                        (SELECT id FROM latest_benchmark_level)
+                            AS benchmark_level_id,
+                        (SELECT event_time FROM latest_benchmark_level)
+                            AS benchmark_level_event_time,
+                        (SELECT received_at FROM latest_benchmark_level)
+                            AS benchmark_level_received_at,
+                        (
+                            (SELECT COUNT(*) FROM balance) = 1
+                            AND EXISTS (
+                                SELECT 1 FROM balance
+                                WHERE cash = 20000 AND total_value = 20000
+                            )
+                            AND NOT EXISTS (SELECT 1 FROM portfolio)
+                            AND NOT EXISTS (
+                                SELECT 1 FROM position_lots
+                                WHERE remaining_shares > 0
+                            )
+                        ) AS ledger_clean,
+                        (SELECT experiment_key FROM active_experiment)
+                            AS active_experiment_key,
+                        (SELECT status FROM active_experiment)
+                            AS active_experiment_status
+                    """
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        "benchmark readiness snapshot is missing"
+                    )
+                return build_benchmark_readiness(dict(row))
+
     def _transition(
         self,
         experiment_key: str,
@@ -478,6 +648,63 @@ def _experiment_key(value: Any) -> str:
     if not isinstance(value, str) or not _KEY_PATTERN.fullmatch(value):
         raise ValueError("experiment_key has invalid format")
     return value
+
+
+def build_benchmark_readiness(
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Turn a read-only database snapshot into stable blocker codes."""
+    if not isinstance(snapshot, dict):
+        raise ValueError("benchmark readiness snapshot must be an object")
+
+    blockers: list[str] = []
+    if not snapshot.get("strategy_version"):
+        blockers.append("ACTIVE_STRATEGY_MISSING")
+    reference_ready = (
+        isinstance(snapshot.get("reference_instrument_count"), int)
+        and snapshot["reference_instrument_count"] >= 300
+        and bool(snapshot.get("reference_checksum_sha256"))
+    )
+    if not reference_ready:
+        blockers.append("REFERENCE_SNAPSHOT_NOT_READY")
+    quote_ready = bool(snapshot.get("quote_contract_key"))
+    if not quote_ready:
+        blockers.append("BENCHMARK_QUOTE_PROVIDER_NOT_READY")
+    benchmark_ready = bool(snapshot.get("benchmark_contract_key"))
+    if not benchmark_ready:
+        blockers.append("OMXSGI_PROVIDER_NOT_READY")
+    if not snapshot.get("benchmark_level_id"):
+        blockers.append("OMXSGI_LEVEL_MISSING")
+    if snapshot.get("ledger_clean") is not True:
+        blockers.append("PAPER_LEDGER_NOT_CLEAN")
+
+    execution_options = []
+    if quote_ready:
+        execution_options.append("LAST_TRADE_PLUS_BPS")
+    if snapshot.get("top_of_book_contract_key"):
+        execution_options.append("TOP_OF_BOOK_PLUS_SLIPPAGE")
+
+    preregistration_blockers = {
+        "ACTIVE_STRATEGY_MISSING",
+        "REFERENCE_SNAPSHOT_NOT_READY",
+        "BENCHMARK_QUOTE_PROVIDER_NOT_READY",
+        "OMXSGI_PROVIDER_NOT_READY",
+    }
+    return {
+        "system_ready_for_preregistration": not any(
+            blocker in preregistration_blockers for blocker in blockers
+        ),
+        "system_ready_for_start": not blockers,
+        "blockers": blockers,
+        "execution_options": execution_options,
+        "evidence": snapshot,
+        "operator_inputs": [
+            "OFFICIAL_RELEASE_EVIDENCE",
+            "FROZEN_MODEL_EVIDENCE",
+            "TRANSACTION_COST_ASSUMPTIONS",
+            "EXPERIMENT_IDENTITY_AND_OPERATOR_APPROVAL",
+        ],
+    }
 
 
 def _operator_identity(value: Any) -> str:
@@ -583,6 +810,8 @@ def _parser() -> argparse.ArgumentParser:
     create = commands.add_parser("create")
     create.add_argument("--registration-json", required=True)
 
+    commands.add_parser("readiness")
+
     for name in ("status", "approve", "start", "pause", "resume", "evaluate"):
         command = commands.add_parser(name)
         command.add_argument("--experiment", required=True)
@@ -637,6 +866,8 @@ def main(argv: list[str] | None = None) -> int:
                 "experiment_key": registration.experiment_key,
                 "preregistration_hash": registration.payload_hash,
             }
+        elif args.command == "readiness":
+            result = admin.get_readiness()
         elif args.command == "status":
             result = admin.get_paper_benchmark(args.experiment)
         elif args.command == "approve":

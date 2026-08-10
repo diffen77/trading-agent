@@ -173,3 +173,27 @@ test('prerequisites alone do not claim that automation is running', () => {
     'ACTION_REQUIRED',
   )
 })
+
+
+test('public pre-trade does not satisfy strict forward benchmark data', () => {
+  const status = blockedStatus()
+  status.universe.company_mappings = 416
+  status.data.provider = {
+    data_type: 'delayed-pre-trade-equity',
+    authorization_basis: 'PUBLIC_NONCOMMERCIAL_TERMS',
+    contract_ready: true,
+    validation_ready: true,
+    acceptance_session_count: 1,
+  }
+
+  const actions = buildActivationActions(status)
+  const index = actions.find(action => action.code === 'INDEX_ACCESS')
+  const paper = actions.find(action => action.code === 'FORWARD_PAPER')
+
+  assert.equal(index.status, 'ACTION_REQUIRED')
+  assert.equal(paper.status, 'WAITING')
+  assert.match(
+    paper.next_step,
+    /värderingsflöde.*OMXSGI/i,
+  )
+})

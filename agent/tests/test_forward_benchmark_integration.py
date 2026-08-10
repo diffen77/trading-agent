@@ -242,7 +242,12 @@ def _insert_provider_contract(
     return contract_id
 
 
-def _insert_reference_snapshot(cursor):
+def _insert_reference_snapshot(
+    cursor,
+    *,
+    snapshot_date=None,
+    checksum="a" * 64,
+):
     cursor.execute(
         """
         INSERT INTO data_sync_runs (
@@ -283,7 +288,7 @@ def _insert_reference_snapshot(cursor):
         VALUES (
             'test-reference',
             'XSTO',
-            CURRENT_DATE,
+            COALESCE(%s, CURRENT_DATE),
             NOW(),
             %s,
             1,
@@ -292,7 +297,7 @@ def _insert_reference_snapshot(cursor):
         )
         RETURNING id
         """,
-        ("a" * 64, sync_run_id),
+        (snapshot_date, checksum, sync_run_id),
     )
     snapshot_id = cursor.fetchone()[0]
     cursor.execute(
@@ -320,12 +325,12 @@ def _insert_reference_snapshot(cursor):
                 TRUE,
                 'ACTIVE',
                 'test-reference',
-                CURRENT_DATE
+                COALESCE(%s, CURRENT_DATE)
             FROM GENERATE_SERIES(1, 416) AS series(value)
             ON CONFLICT (isin) DO UPDATE SET
                 status = 'ACTIVE',
                 source = 'test-reference',
-                reference_snapshot_date = CURRENT_DATE
+                reference_snapshot_date = EXCLUDED.reference_snapshot_date
             RETURNING id, isin
         )
         INSERT INTO reference_snapshot_instruments (
@@ -336,7 +341,7 @@ def _insert_reference_snapshot(cursor):
         SELECT %s, inserted.id, inserted.isin
         FROM inserted
         """,
-        (snapshot_id,),
+        (snapshot_date, snapshot_id),
     )
     return snapshot_id
 
@@ -726,6 +731,7 @@ def _insert_experiment(
     reference_snapshot_id=None,
     min_trading_sessions=252,
     initial_status="DRAFT",
+    universe_checksum="a" * 64,
 ):
     if execution_contract_id is None:
         execution_contract_id = quote_contract_id
@@ -775,7 +781,7 @@ def _insert_experiment(
         "model_name": "frozen-test-model",
         "model_evidence_sha256": "3" * 64,
         "reference_snapshot_id": reference_snapshot_id,
-        "universe_checksum_sha256": "a" * 64,
+        "universe_checksum_sha256": universe_checksum,
         "quote_provider_contract_key": provider_keys.get(
             quote_contract_id
         ),
@@ -895,7 +901,7 @@ def _insert_experiment(
             "3" * 64,
             reference_snapshot_id,
             reference_snapshot_id,
-            "a" * 64,
+            universe_checksum,
             quote_contract_id,
             execution_price_source,
             execution_contract_id,
@@ -1124,6 +1130,58 @@ def test_approval_rejects_quote_evidence_for_wrong_universe_size(connection):
                 contract_key="wrong-size-quote",
                 data_type="delayed-post-trade-equity",
                 expected_instruments=1,
+            )
+
+
+def test_approval_rejects_provider_validated_for_another_snapshot(connection):
+    with connection.cursor() as cursor:
+        _insert_reference_snapshot(
+            cursor,
+            snapshot_date=date.today() - timedelta(days=2),
+            checksum="a" * 64,
+        )
+        quote_contract_id = _insert_provider_contract(
+            cursor,
+            contract_key="stale-snapshot-quote",
+            data_type="delayed-post-trade-equity",
+            expected_instruments=416,
+        )
+        current_snapshot_id = _insert_reference_snapshot(
+            cursor,
+            snapshot_date=date.today() - timedelta(days=1),
+            checksum="c" * 64,
+        )
+        benchmark_contract_id = _insert_provider_contract(
+            cursor,
+            contract_key="current-snapshot-benchmark",
+            data_type="delayed-index-level",
+            expected_instruments=1,
+        )
+        experiment_id = _insert_experiment(
+            cursor,
+            quote_contract_id=quote_contract_id,
+            benchmark_contract_id=benchmark_contract_id,
+            reference_snapshot_id=current_snapshot_id,
+            universe_checksum="c" * 64,
+        )
+
+        with pytest.raises(
+            psycopg2.errors.RaiseException,
+            match=(
+                "provider validation does not match frozen "
+                "reference snapshot"
+            ),
+        ):
+            cursor.execute(
+                """
+                UPDATE paper_benchmark_experiments
+                SET
+                    status = 'APPROVED',
+                    approved_by = 'operator:test',
+                    approved_at = NOW()
+                WHERE id = %s
+                """,
+                (experiment_id,),
             )
 
 
@@ -3307,6 +3365,69 @@ def test_running_experiment_applies_costs_to_cash_and_fifo_pnl(
                 """
             )
         connection.commit()
+
+
+def test_benchmark_readiness_reports_exact_start_prerequisites(connection):
+    with connection.cursor() as cursor:
+        reference_snapshot_id = _insert_reference_snapshot(cursor)
+        quote_key = "readiness-quotes"
+        benchmark_key = "readiness-benchmark"
+        _insert_provider_contract(
+            cursor,
+            contract_key=quote_key,
+            data_type="delayed-post-trade-equity",
+            expected_instruments=416,
+        )
+        benchmark_contract_id = _insert_provider_contract(
+            cursor,
+            contract_key=benchmark_key,
+            data_type="delayed-index-level",
+            expected_instruments=1,
+        )
+        available_at = datetime.now(timezone.utc)
+        cursor.execute(
+            """
+            INSERT INTO market_index_levels (
+                provider_contract_id,
+                symbol,
+                mic,
+                event_time,
+                received_at,
+                source,
+                level,
+                source_checksum_sha256
+            )
+            VALUES (
+                %s,
+                'OMXSGI',
+                'XSTO',
+                %s,
+                %s,
+                'test-provider-index',
+                100,
+                %s
+            )
+            """,
+            (
+                benchmark_contract_id,
+                available_at - timedelta(minutes=15),
+                available_at,
+                "9" * 64,
+            ),
+        )
+    connection.commit()
+
+    result = BenchmarkAdmin(TEST_DATABASE_URL).get_readiness()
+
+    assert result["system_ready_for_preregistration"] is True
+    assert result["system_ready_for_start"] is True
+    assert result["blockers"] == []
+    assert result["execution_options"] == ["LAST_TRADE_PLUS_BPS"]
+    assert result["evidence"]["reference_snapshot_id"] == (
+        reference_snapshot_id
+    )
+    assert result["evidence"]["quote_contract_key"] == quote_key
+    assert result["evidence"]["benchmark_contract_key"] == benchmark_key
 
 
 def test_database_admin_flow_creates_approves_and_starts_frozen_registration(

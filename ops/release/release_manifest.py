@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 
-REQUIRED_SCHEMA = 44
+REQUIRED_SCHEMA = 45
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _PREFIX_PATTERN = re.compile(

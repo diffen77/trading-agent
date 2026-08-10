@@ -81,7 +81,7 @@ def collect_health_report(
             HealthCheck(
                 code="database_schema",
                 ok=False,
-                detail="database unavailable or schema below version 44",
+                detail="database unavailable or schema below version 45",
             )
         )
         return _report(mode, now, checks)
@@ -90,7 +90,7 @@ def collect_health_report(
         HealthCheck(
             code="database_schema",
             ok=True,
-            detail="database reachable with schema version 44 or newer",
+            detail="database reachable with schema version 45 or newer",
         )
     )
     _check_ledger(database, checks)

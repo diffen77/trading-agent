@@ -469,7 +469,7 @@ def test_runtime_schema_is_complete(connection):
         REQUIRED_PROVIDER_VALIDATION_COLUMNS
         <= provider_validation_columns
     )
-    assert schema_version == 44
+    assert schema_version == 45
     assert REQUIRED_AI_DECISION_COLUMNS <= ai_decision_columns
     assert REQUIRED_MARKET_BAR_COLUMNS <= market_bar_columns
     assert REQUIRED_MARKET_QUOTE_COLUMNS <= market_quote_columns

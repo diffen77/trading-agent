@@ -52,10 +52,30 @@ fryses när de binds. Ett bundet avtals governance-status får endast gå
 eller retroaktiv omskrivning kräver ett nytt avtal och ett nytt
 experiment.
 
-Den nuvarande Nasdaq-konfigurationen är `DRAFT`. Skapa därför inte ett
-låtsasgodkännande för att komma förbi spärren.
+Den publika fördröjda pre-trade-strömmen får användas för intern
+papertrading, men räknas inte som värderingsfeed eller OMXSGI-bevis i
+det här experimentet. Skapa aldrig ett låtsasgodkännande för att komma
+förbi spärren.
 
 ## Operatörsflöde
+
+Kör först den read-only preflight som speglar databasens hårda spärrar:
+
+```bash
+docker compose exec agent python -m src.benchmark_admin readiness
+```
+
+Svaret skiljer på `system_ready_for_preregistration` och
+`system_ready_for_start`. `blockers` använder stabila felkoder för
+aktiv strategi, fryst referenssnapshot, separat värderingsfeed,
+OMXSGI-provider, importerad OMXSGI-nivå och en ren paperledger med
+20 000 SEK. `execution_options` visar endast de prismodeller som den
+aktuella providerevidensen faktiskt tillåter. Kommandot skapar inget
+experiment, godkänner inget och ändrar ingen data.
+
+`operator_inputs` förblir manuella: officiell release- och
+image-evidens, fryst modellevidens, kostnadsantaganden samt identitet
+och godkännande. Preflighten får inte hitta på dessa beslut.
 
 Skapa en JSON-fil med hela registreringen:
 

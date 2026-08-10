@@ -62,13 +62,16 @@ export function buildActivationActions(status) {
       )
       : count(provider?.acceptance_session_count)
   )
-  const indexContractReady = (
-    publicPretrade || index?.contract_ready === true
-  )
-  const indexValidationReady = (
-    publicPretrade || index?.validation_ready === true
-  )
+  const indexContractReady = index?.contract_ready === true
+  const indexValidationReady = index?.validation_ready === true
   const indexReady = indexContractReady && indexValidationReady
+  const benchmarkValuationReady = (
+    quoteReady
+    && [
+      'delayed-post-trade-equity',
+      'realtime-equity-level-1',
+    ].includes(provider?.data_type)
+  )
   const benchmarkPassed = (
     benchmark?.passed === true || benchmark?.status === 'PASSED'
   )
@@ -76,7 +79,7 @@ export function buildActivationActions(status) {
   const prerequisitesReady = (
     referenceReady
     && mappingReady
-    && quoteReady
+    && benchmarkValuationReady
     && indexReady
   )
 
@@ -228,21 +231,13 @@ export function buildActivationActions(status) {
       owner: 'Du + Nasdaq',
       automation: 'MANUAL',
       detail: indexReady
-        ? (
-          publicPretrade
-            ? 'Separat OMXSGI-signal krävs inte för att starta intern papertrading; indexbenchmark läggs till separat.'
-            : 'OMXSGI-avtal, transport och signal är verifierade.'
-        )
+        ? 'OMXSGI-avtal, transport och signal är verifierade.'
         : (
           'Indexdata omfattas inte automatiskt av det fördröjda '
           + 'aktieflödet och kräver separat rättighet.'
         ),
       next_step: indexReady
-        ? (
-          publicPretrade
-            ? 'Välj senare en laglig benchmark utan att blockera paperflödet.'
-            : 'Övervaka signalens färskhet och giltighet.'
-        )
+        ? 'Övervaka signalens färskhet och giltighet.'
         : (
           indexContractReady
             ? 'Slutför transport- och signalvalideringen.'
@@ -278,7 +273,10 @@ export function buildActivationActions(status) {
             : (
               prerequisitesReady
                 ? 'Starta det frysta forward-testet utan riktiga pengar.'
-                : 'Väntar tills data, mappning och index är verifierade.'
+                : (
+                  'Väntar tills mappning, separat värderingsflöde och '
+                  + 'OMXSGI är verifierade.'
+                )
             )
         ),
       progress: progress(
