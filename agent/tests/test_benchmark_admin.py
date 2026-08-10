@@ -111,9 +111,48 @@ def test_benchmark_readiness_is_fail_closed_and_actionable():
         "OMXSGI_PROVIDER_NOT_READY",
         "OMXSGI_LEVEL_MISSING",
         "PAPER_LEDGER_NOT_CLEAN",
+        "APPROVED_PREREGISTRATION_MISSING",
     ]
     assert result["execution_options"] == [
         "TOP_OF_BOOK_PLUS_SLIPPAGE",
     ]
     assert result["operator_inputs"]
     assert _parser().parse_args(["readiness"]).command == "readiness"
+
+
+def test_benchmark_start_readiness_requires_an_approved_registration():
+    snapshot = {
+        "strategy_version": "momentum-report-swing-v1",
+        "strategy_config_hash": "1" * 64,
+        "reference_snapshot_id": 7,
+        "reference_instrument_count": 416,
+        "reference_checksum_sha256": "2" * 64,
+        "quote_contract_key": "licensed-quotes-v1",
+        "top_of_book_contract_key": None,
+        "benchmark_contract_key": "licensed-omxsgi-v1",
+        "benchmark_level_id": 11,
+        "ledger_clean": True,
+        "active_experiment_key": None,
+        "active_experiment_status": None,
+    }
+
+    result = build_benchmark_readiness(snapshot)
+
+    assert result["system_ready_for_preregistration"] is True
+    assert result["system_ready_for_start"] is False
+    assert result["blockers"] == [
+        "APPROVED_PREREGISTRATION_MISSING",
+    ]
+
+    snapshot["active_experiment_key"] = "forward-2026-08"
+    snapshot["active_experiment_status"] = "APPROVED"
+    approved = build_benchmark_readiness(snapshot)
+
+    assert approved["system_ready_for_start"] is True
+    assert approved["blockers"] == []
+
+    snapshot["active_experiment_status"] = "RUNNING"
+    running = build_benchmark_readiness(snapshot)
+
+    assert running["system_ready_for_start"] is False
+    assert running["blockers"] == ["BENCHMARK_ALREADY_ACTIVE"]

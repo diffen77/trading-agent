@@ -69,7 +69,11 @@ Svaret skiljer på `system_ready_for_preregistration` och
 `system_ready_for_start`. `blockers` använder stabila felkoder för
 aktiv strategi, fryst referenssnapshot, separat värderingsfeed,
 OMXSGI-provider, importerad OMXSGI-nivå och en ren paperledger med
-20 000 SEK. `execution_options` visar endast de prismodeller som den
+20 000 SEK. Startberedskap kräver dessutom en förregistrering i status
+`APPROVED`; ett saknat eller endast utkastat experiment rapporteras som
+`APPROVED_PREREGISTRATION_MISSING`, medan ett redan startat eller pausat
+experiment rapporteras som `BENCHMARK_ALREADY_ACTIVE`.
+`execution_options` visar endast de prismodeller som den
 aktuella providerevidensen faktiskt tillåter. Kommandot skapar inget
 experiment, godkänner inget och ändrar ingen data.
 

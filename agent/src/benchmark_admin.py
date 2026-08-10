@@ -677,6 +677,11 @@ def build_benchmark_readiness(
         blockers.append("OMXSGI_LEVEL_MISSING")
     if snapshot.get("ledger_clean") is not True:
         blockers.append("PAPER_LEDGER_NOT_CLEAN")
+    experiment_status = snapshot.get("active_experiment_status")
+    if experiment_status in {"RUNNING", "PAUSED"}:
+        blockers.append("BENCHMARK_ALREADY_ACTIVE")
+    elif experiment_status != "APPROVED":
+        blockers.append("APPROVED_PREREGISTRATION_MISSING")
 
     execution_options = []
     if quote_ready:

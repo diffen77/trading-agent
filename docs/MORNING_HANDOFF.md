@@ -47,7 +47,7 @@ Extern åtgärd: välj och licensiera produkter som tillsammans innehåller:
 - dokumenterade rättigheter för lagring, intern analys och härledda resultat.
 
 Lägg därefter leveransmanifestet och samplefilerna genom
-`python -m src.historical_data_preflight verify <manifest>`. Kontrollen kan
+`python -m src.historical_data_preflight --manifest <manifest>`. Kontrollen kan
 godkänna leveransen för adapterkartläggning, men säger avsiktligt inte att
 backtest är redo innan den formatspecifika importern finns och har verifierats.
 

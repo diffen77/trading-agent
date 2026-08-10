@@ -31,7 +31,7 @@ Följande ändringar finns som separata commits på recovery-branchen:
 - `9f0439c`: checksummebunden leveranskontroll för licensierad historik,
   corporate actions, OMXSGI, kalender och användningsrätt.
 
-På ett nybyggt PostgreSQL 16-schema 45 passerade 658 agenttester och 65
+På ett nybyggt PostgreSQL 16-schema 45 passerade 664 agenttester och 65
 dashboardtester. Dashboardens produktionsbygge passerade. Den historiska
 leveranskontrollens fem fokustester passerade efter den fulla körningen.
 GitHub Actions ska fortfarande vara grön på slutcommit innan branchen kan

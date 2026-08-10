@@ -3420,8 +3420,10 @@ def test_benchmark_readiness_reports_exact_start_prerequisites(connection):
     result = BenchmarkAdmin(TEST_DATABASE_URL).get_readiness()
 
     assert result["system_ready_for_preregistration"] is True
-    assert result["system_ready_for_start"] is True
-    assert result["blockers"] == []
+    assert result["system_ready_for_start"] is False
+    assert result["blockers"] == [
+        "APPROVED_PREREGISTRATION_MISSING",
+    ]
     assert result["execution_options"] == ["LAST_TRADE_PLUS_BPS"]
     assert result["evidence"]["reference_snapshot_id"] == (
         reference_snapshot_id
