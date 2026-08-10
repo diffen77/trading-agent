@@ -8,6 +8,9 @@ venv/
 env/
 .env
 *.egg-info/
+.hypothesis/
+.pytest_cache/
+.cache/
 dist/
 build/
 
@@ -49,7 +52,12 @@ Thumbs.db
 .context/cache/
 .context/plan/
 .context/hooks/
+.serena/
 .npm-cache/
 mcp/.npm-cache/
 mcp/dist/
 mcp/node_modules/
+.context/*
+!.context/config.yaml
+!.context/rules.yaml
+!.context/ontology.cypher

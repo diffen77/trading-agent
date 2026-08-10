@@ -1,43 +1,78 @@
-#!/bin/bash
-BASE_URL=${1:-https://trading.lediff.se}
-FAILED=0
+#!/bin/sh
+set -eu
 
-echo "🔥 Smoke test: $BASE_URL"
-echo "================================"
+base_url=${1:-http://127.0.0.1:3020}
+: "${DASHBOARD_AUTH_USERNAME:?DASHBOARD_AUTH_USERNAME must be set}"
+: "${DASHBOARD_AUTH_PASSWORD:?DASHBOARD_AUTH_PASSWORD must be set}"
 
-check_url() {
-    local url="$1"
-    local response=$(curl -s -o /dev/null -w "%{http_code}" "$url")
-    if [ "$response" -eq 200 ]; then
-        echo -e "\e[32m✅\e[0m $url"
-    else
-        echo -e "\e[31m❌\e[0m $url (HTTP $response)"
-        FAILED=1
-    fi
-}
+python3 - "$base_url" <<'PY'
+import base64
+import json
+import os
+import sys
+from urllib.error import HTTPError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
-check_json() {
-    local url="$1"
-    local response=$(curl -s "$url")
-    if echo "$response" | jq empty &> /dev/null; then
-        echo -e "\e[32m✅\e[0m $url (valid JSON)"
-    else
-        echo -e "\e[31m❌\e[0m $url (invalid JSON)"
-        FAILED=1
-    fi
-}
 
-check_url "$BASE_URL"
-check_url "$BASE_URL/api/portfolio"
-check_json "$BASE_URL/api/portfolio"
-check_url "$BASE_URL/api/stocks"
-check_json "$BASE_URL/api/stocks"
+base_url = sys.argv[1].rstrip("/")
+parsed = urlparse(base_url)
+if (
+    parsed.scheme not in {"http", "https"}
+    or not parsed.netloc
+    or parsed.username is not None
+    or parsed.password is not None
+):
+    raise SystemExit("invalid dashboard URL")
 
-echo "================================"
-if [ "$FAILED" -eq 0 ]; then
-    echo -e "\e[32m🎉 All checks passed!\e[0m"
-    exit 0
-else
-    echo -e "\e[31m💀 Some checks failed!\e[0m"
-    exit 1
-fi
+
+def request(path, *, authorization=None):
+    headers = {}
+    if authorization is not None:
+        headers["Authorization"] = authorization
+    try:
+        with urlopen(
+            Request(f"{base_url}{path}", headers=headers),
+            timeout=10,
+        ) as response:
+            return response.status, response.read(1_000_000)
+    except HTTPError as error:
+        return error.code, error.read(1_000_000)
+
+
+health_status, health_body = request("/api/health")
+if health_status != 200:
+    raise SystemExit(f"health failed with HTTP {health_status}")
+try:
+    health = json.loads(health_body)
+except json.JSONDecodeError as error:
+    raise SystemExit("health returned invalid JSON") from error
+if health.get("status") != "ok":
+    raise SystemExit("health did not report ok")
+
+private_status, _ = request("/api/portfolio")
+if private_status != 401:
+    raise SystemExit(
+        f"unauthenticated API returned HTTP {private_status}, expected 401"
+    )
+
+credentials = (
+    f"{os.environ['DASHBOARD_AUTH_USERNAME']}:"
+    f"{os.environ['DASHBOARD_AUTH_PASSWORD']}"
+).encode("utf-8")
+authorization = "Basic " + base64.b64encode(credentials).decode("ascii")
+authorized_status, authorized_body = request(
+    "/api/portfolio",
+    authorization=authorization,
+)
+if authorized_status != 200:
+    raise SystemExit(
+        f"authenticated API returned HTTP {authorized_status}"
+    )
+try:
+    json.loads(authorized_body)
+except json.JSONDecodeError as error:
+    raise SystemExit("authenticated API returned invalid JSON") from error
+
+print("dashboard smoke passed: health=200 unauthenticated=401 authenticated=200")
+PY

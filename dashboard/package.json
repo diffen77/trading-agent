@@ -6,23 +6,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "next": "14.2.25",
-    "react": "^18",
-    "react-dom": "^18",
+    "next": "15.5.21",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "pg": "^8.11.3",
     "recharts": "^2.12.0"
   },
   "devDependencies": {
     "typescript": "^5",
     "@types/node": "^20",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
     "@types/pg": "^8",
     "autoprefixer": "^10",
-    "postcss": "^8",
+    "postcss": "8.5.25",
     "tailwindcss": "^3.4.1"
+  },
+  "overrides": {
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
   }
 }

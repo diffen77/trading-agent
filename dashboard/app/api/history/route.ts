@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server'
-import { Pool } from 'pg'
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+import {
+  databaseUnavailable,
+  getDatabasePool,
+} from '@/lib/server/database'
+import {
+  loadPortfolioState,
+} from '@/lib/server/portfolio-valuation.mjs'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
   try {
+    const pool = getDatabasePool()
     const { searchParams } = new URL(request.url)
     const period = searchParams.get('period') || '1M'
 
@@ -34,26 +40,17 @@ export async function GET(request: Request) {
     `)
 
     if (result.rows.length === 0) {
-      // Return baseline
-      const baseline = await pool.query(`
-        SELECT 
-          b.cash + COALESCE(SUM(p.shares * pr.close), 0) as total_value,
-          b.cash,
-          COALESCE(SUM(p.shares * pr.close), 0) as positions_value,
-          NOW() as recorded_at
-        FROM balance b
-        LEFT JOIN portfolio p ON true
-        LEFT JOIN LATERAL (
-          SELECT close FROM prices WHERE ticker = p.ticker ORDER BY date DESC LIMIT 1
-        ) pr ON true
-        GROUP BY b.cash
-      `)
-      return NextResponse.json(baseline.rows)
+      const baseline = await loadPortfolioState(pool)
+      return NextResponse.json([{
+        total_value: baseline.total_value,
+        cash: baseline.cash,
+        positions_value: baseline.positions_value,
+        recorded_at: new Date().toISOString(),
+      }])
     }
 
     return NextResponse.json(result.rows)
   } catch (error) {
-    console.error('Error fetching history:', error)
-    return NextResponse.json([])
+    return databaseUnavailable('fetch portfolio history', error)
   }
 }

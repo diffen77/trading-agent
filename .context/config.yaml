@@ -1,11 +1,21 @@
-repo_id: cortex
+repo_id: trading-agent
 source_paths:
-  - src
+  - agent/src
+  - agent/tests
+  - dashboard/app
+  - dashboard/lib
+  - dashboard/tests
+  - db
+  - ops
+  - .github/workflows
   - docs
-  - design
   - .context/notes
   - .context/decisions
   - README.md
+  - PROJECT.md
+  - REQUIREMENTS.md
+  - ROADMAP.md
+  - STATE.md
 truth_order:
   - ADR
   - RULE

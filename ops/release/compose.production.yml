@@ -1,0 +1,495 @@
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE must be an immutable digest}
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: trading_agent
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE must be an immutable digest}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "0"
+        gid: "0"
+        mode: 0400
+    volumes:
+      - ../../db:/db:ro
+    entrypoint: ["/bin/sh", "/db/migrate.sh"]
+    restart: "no"
+
+  calendar-sync:
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.calendar_sync"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    restart: "no"
+
+  agent:
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      calendar-sync:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+      HERMES_API_KEY_FILE: /run/secrets/hermes_api_key
+      HERMES_PROVIDER: ${HERMES_PROVIDER:-openai-codex}
+      HERMES_URL: ${HERMES_URL:-}
+      LLM_BACKEND: ${LLM_BACKEND:-openai-compatible}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5-coder:14b}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-medium}
+      OPENAI_COMPATIBLE_API_KEY_FILE: /run/secrets/openai_compatible_api_key
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TELEGRAM_CHAT_ID_FILE: /run/secrets/telegram_chat_id
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: anthropic_api_key
+        target: anthropic_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: hermes_api_key
+        target: hermes_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: openai_compatible_api_key
+        target: openai_compatible_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: telegram_bot_token
+        target: telegram_bot_token
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: telegram_chat_id
+        target: telegram_chat_id
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - agent_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.healthcheck", "readiness"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  learning-worker:
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      calendar-sync:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.learning_worker", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      LEARNING_WORKER_INTERVAL_SECONDS: ${LEARNING_WORKER_INTERVAL_SECONDS:-300}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    restart: unless-stopped
+
+  knowledge-worker:
+    profiles: ["knowledge-graph"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.knowledge_worker", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      NEO4J_URL: ${NEO4J_URL:?NEO4J_URL must be set}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD_FILE: /run/secrets/neo4j_password
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+      NEO4J_SYNC_BATCH_SIZE: ${NEO4J_SYNC_BATCH_SIZE:-1000}
+      KNOWLEDGE_GRAPH_SYNC_INTERVAL_SECONDS: ${KNOWLEDGE_GRAPH_SYNC_INTERVAL_SECONDS:-300}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: neo4j_password
+        target: neo4j_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.knowledge_worker", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  knowledge-shadow-worker:
+    profiles: ["knowledge-graph"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.knowledge_shadow_worker", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      NEO4J_URL: ${NEO4J_URL:?NEO4J_URL must be set}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD_FILE: /run/secrets/neo4j_password
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+      HERMES_API_KEY_FILE: /run/secrets/hermes_api_key
+      HERMES_PROVIDER: ${HERMES_PROVIDER:-openai-codex}
+      HERMES_URL: ${HERMES_URL:-}
+      LLM_BACKEND: ${LLM_BACKEND:-openai-compatible}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5-coder:14b}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-medium}
+      OPENAI_COMPATIBLE_API_KEY_FILE: /run/secrets/openai_compatible_api_key
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      KNOWLEDGE_SHADOW_INTERVAL_SECONDS: ${KNOWLEDGE_SHADOW_INTERVAL_SECONDS:-300}
+      KNOWLEDGE_SHADOW_MAX_RUNS_PER_CYCLE: ${KNOWLEDGE_SHADOW_MAX_RUNS_PER_CYCLE:-2}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: neo4j_password
+        target: neo4j_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: anthropic_api_key
+        target: anthropic_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: hermes_api_key
+        target: hermes_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: openai_compatible_api_key
+        target: openai_compatible_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.knowledge_shadow_worker", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  object-archive-worker:
+    profiles: ["object-storage"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.object_archive", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-garage}
+      OBJECT_ARCHIVE_INTERVAL_SECONDS: ${OBJECT_ARCHIVE_INTERVAL_SECONDS:-300}
+      OBJECT_ARCHIVE_MAX_FILES_PER_CYCLE: ${OBJECT_ARCHIVE_MAX_FILES_PER_CYCLE:-10}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: s3_access_key_id
+        target: s3_access_key_id
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: s3_secret_access_key
+        target: s3_secret_access_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.object_archive", "health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  monitor:
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      calendar-sync:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.operational_monitor", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      HERMES_API_KEY_FILE: /run/secrets/hermes_api_key
+      HERMES_PROVIDER: ${HERMES_PROVIDER:-openai-codex}
+      HERMES_URL: ${HERMES_URL:-}
+      LLM_BACKEND: ${LLM_BACKEND:-openai-compatible}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5-coder:14b}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-medium}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      TELEGRAM_CHAT_ID_FILE: /run/secrets/telegram_chat_id
+      OPERATIONAL_MONITOR_INTERVAL_SECONDS: ${OPERATIONAL_MONITOR_INTERVAL_SECONDS:-60}
+      OPERATIONAL_MONITOR_PHASE_SECONDS: ${OPERATIONAL_MONITOR_PHASE_SECONDS:-30}
+      XSTO_MINIMUM_INSTRUMENTS: ${XSTO_MINIMUM_INSTRUMENTS:-300}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: hermes_api_key
+        target: hermes_api_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: telegram_bot_token
+        target: telegram_bot_token
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+      - source: telegram_chat_id
+        target: telegram_chat_id
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+
+  universe-sync:
+    profiles: ["market-data", "nasdaq-reference"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.universe_sync", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ENABLE_ESMA_REFERENCE_SYNC: ${ENABLE_ESMA_REFERENCE_SYNC:-true}
+      REFERENCE_SYNC_INTERVAL_SECONDS: ${REFERENCE_SYNC_INTERVAL_SECONDS:-21600}
+      XSTO_MINIMUM_INSTRUMENTS: ${XSTO_MINIMUM_INSTRUMENTS:-300}
+      XSTO_MAXIMUM_INSTRUMENTS: ${XSTO_MAXIMUM_INSTRUMENTS:-1000}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.reference_healthcheck"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  market-sync:
+    profiles: ["market-data"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      universe-sync:
+        condition: service_healthy
+      calendar-sync:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.market_sync", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ENABLE_NASDAQ_PUBLIC_PRETRADE: ${ENABLE_NASDAQ_PUBLIC_PRETRADE:-true}
+      NASDAQ_PRETRADE_CONTRACT_KEY: ${NASDAQ_PRETRADE_CONTRACT_KEY:-nasdaq-public-pretrade-xsto-v1}
+      NASDAQ_PRETRADE_MAX_FILES_PER_RUN: ${NASDAQ_PRETRADE_MAX_FILES_PER_RUN:-10}
+      NASDAQ_PRETRADE_TEMP_DIRECTORY: /tmp
+      ENABLE_NASDAQ_DELAYED_INGESTION: ${ENABLE_NASDAQ_DELAYED_INGESTION:-false}
+      MARKET_DATA_CONTRACT_KEY: ${MARKET_DATA_CONTRACT_KEY:-nasdaq-nordic-delayed-xsto-v1}
+      MARKET_DATA_SYNC_INTERVAL_SECONDS: ${MARKET_DATA_SYNC_INTERVAL_SECONDS:-60}
+      MARKET_DATA_MAX_FILES_PER_RUN: ${MARKET_DATA_MAX_FILES_PER_RUN:-10}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    restart: unless-stopped
+
+  nasdaq-alias-sync:
+    profiles: ["nasdaq-reference"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    user: "${NASDAQ_NDL_RUN_AS_UID:-1000}:${NASDAQ_NDL_RUN_AS_GID:-1000}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      universe-sync:
+        condition: service_healthy
+      calendar-sync:
+        condition: service_completed_successfully
+    command: ["python", "-m", "src.nasdaq_alias_sync", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ENABLE_NASDAQ_REFERENCE_SYNC: ${ENABLE_NASDAQ_REFERENCE_SYNC:-false}
+      NASDAQ_REFERENCE_CONTRACT_KEY: ${NASDAQ_REFERENCE_CONTRACT_KEY:-}
+      NASDAQ_NDL_USERNAME: ${NASDAQ_NDL_USERNAME:-}
+      NASDAQ_NDL_PRIVATE_KEY_FILE: /run/nasdaq-ndl/private_key
+      NASDAQ_NDL_KNOWN_HOSTS_FILE: /run/nasdaq-ndl/known_hosts
+      NASDAQ_NDL_TIMEOUT_SECONDS: ${NASDAQ_NDL_TIMEOUT_SECONDS:-15}
+      NASDAQ_NDL_TIP_VERSION: ${NASDAQ_NDL_TIP_VERSION:-3.10.17.1}
+      NASDAQ_REFERENCE_SYNC_INTERVAL_SECONDS: ${NASDAQ_REFERENCE_SYNC_INTERVAL_SECONDS:-3600}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "${NASDAQ_NDL_RUN_AS_UID:-1000}"
+        gid: "${NASDAQ_NDL_RUN_AS_GID:-1000}"
+        mode: 0400
+    volumes:
+      - type: bind
+        source: ${NASDAQ_NDL_PRIVATE_KEY_HOST_FILE:-/dev/null}
+        target: /run/nasdaq-ndl/private_key
+        read_only: true
+      - type: bind
+        source: ${NASDAQ_NDL_KNOWN_HOSTS_HOST_FILE:-/dev/null}
+        target: /run/nasdaq-ndl/known_hosts
+        read_only: true
+    restart: on-failure:5
+
+  dashboard:
+    image: ${DASHBOARD_IMAGE:?DASHBOARD_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      DASHBOARD_AUTH_USERNAME_FILE: /run/secrets/dashboard_auth_username
+      DASHBOARD_AUTH_PASSWORD_FILE: /run/secrets/dashboard_auth_password
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: dashboard_auth_username
+        target: dashboard_auth_username
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: dashboard_auth_password
+        target: dashboard_auth_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+    ports:
+      - 127.0.0.1:${DASHBOARD_PORT:-3020}:3000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  agent_data:
+
+secrets:
+  postgres_password:
+    environment: TRADING_AGENT_POSTGRES_PASSWORD_SECRET
+  database_url:
+    environment: TRADING_AGENT_DATABASE_URL_SECRET
+  dashboard_auth_username:
+    environment: TRADING_AGENT_DASHBOARD_AUTH_USERNAME_SECRET
+  dashboard_auth_password:
+    environment: TRADING_AGENT_DASHBOARD_AUTH_PASSWORD_SECRET
+  anthropic_api_key:
+    environment: TRADING_AGENT_ANTHROPIC_API_KEY_SECRET
+  hermes_api_key:
+    environment: TRADING_AGENT_HERMES_API_KEY_SECRET
+  openai_compatible_api_key:
+    environment: TRADING_AGENT_OPENAI_COMPATIBLE_API_KEY_SECRET
+  telegram_bot_token:
+    environment: TRADING_AGENT_TELEGRAM_BOT_TOKEN_SECRET
+  telegram_chat_id:
+    environment: TRADING_AGENT_TELEGRAM_CHAT_ID_SECRET
+  neo4j_password:
+    environment: TRADING_AGENT_NEO4J_PASSWORD_SECRET
+  s3_access_key_id:
+    environment: TRADING_AGENT_S3_ACCESS_KEY_ID_SECRET
+  s3_secret_access_key:
+    environment: TRADING_AGENT_S3_SECRET_ACCESS_KEY_SECRET

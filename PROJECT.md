@@ -5,7 +5,9 @@ En AI-agent som papertradar svenska aktier på Stockholmsbörsen, lär sig över
 
 ## Mål
 - Papertrading med 20 000 kr simulerat kapital
-- Sikta på att dubbla på 6 månader (ambitiöst lärandemål)
+- Mäta nettoresultat och risk mot ett förutbestämt XSTO-benchmark
+- Prioritera kapitalbevarande och reproducerbarhet framför ett
+  orealistiskt avkastningsmål
 - Agenten ska förstå samband (makro → bolag)
 - Transparens: varje trade har en "varför"-rapport
 
@@ -18,16 +20,27 @@ Agenten är inte en teknisk robot som tittar på RSI. Den är en analytiker som:
 5. Lär sig av sina trades
 
 ## Tech Stack
-- **Data**: Yahoo Finance (gratis, 15 min delay)
-- **Agent**: Python + OpenClaw sub-agent (Sonnet)
+- **Data**: kontraktsstyrda provider-interface för XSTO och OMXSGI
+- **Agent**: Python + lokal OpenAI-kompatibel modell eller Anthropic
 - **Database**: PostgreSQL (trades, lärdomar, bolagsdata)
 - **Dashboard**: Next.js
-- **Deploy**: Docker på 192.168.99.2
+- **Deploy**: Docker på Kajen; staging visas på
+  `https://trader.lediff.online`
 
 ## Constraints
 - Ingen broker-integration (papertrades simuleras)
-- Hela Stockholmsbörsen (~400 aktier)
-- Agenten körs på schema (07:00, 09:00, 12:00, 17:30, 22:00)
+- Alla relevanta stamaktier, preferensaktier och depåbevis på Nasdaq
+  Stockholm (`XSTO`); övriga svenska handelsplatser kräver separat beslut
+- Marknadsdata måste vara licensierad realtid eller högst 15 minuter
+  fördröjd och freshness-validerad
+- Nyheter, rapportkalender, fundamenta och övrig makro får inte påverka
+  AI-beslut utan auktoriserad källa och spårbar proveniens
+- Agenten följer `Europe/Stockholm` och officiell handelskalender
+- Strategi- och riskregler är versionsstyrda; AI får endast föreslå
+  beslut och observationer, aldrig godkänna eller aktivera nya regler
+- Riktiga pengar är blockerade tills papertrading och benchmark är
+  verifierade
+- Dashboarden är lokal och autentiserad; extern åtkomst kräver TLS
 
 ## Success Metrics
 - Agenten fattar beslut med tydlig motivering

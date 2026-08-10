@@ -2,7 +2,7 @@
 Trading Agent - Main Entry Point
 
 This is the core agent that:
-1. Fetches market data from Yahoo Finance
+1. Consumes validated provider data from PostgreSQL
 2. Analyzes companies and macro factors
 3. Makes paper trading decisions
 4. Logs everything with reasoning
@@ -22,21 +22,25 @@ Run modes:
 - python -m agent.src.main snapshot     # Save portfolio snapshot
 """
 
-import os
 import sys
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-from .data.yahoo import YahooDataFetcher
 from .data.database import Database
-from .data.news import NewsFetcher
-from .data.reports import ReportTracker
 from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
 from .core.brain import TradingBrain
 from .core.student import TradingStudent
 from .core.notifier import TelegramNotifier
+from .core.schedule import (
+    BRAIN_CYCLE_INTERVAL_MINUTES,
+    brain_cycle_slot,
+    due_routines,
+    recoverable_routines,
+    recovery_slots,
+    stockholm_now,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -45,15 +49,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Schedule: which hours (CET) to run which routines
-# Docker runs in UTC, so we offset by +1 (CET) or +2 (CEST)
-SCHEDULE_UTC = {
-    6: 'morning',    # 07:00 CET
-    8: 'open',       # 09:00 CET
-    11: 'midday',    # 12:00 CET
-    16: 'close',     # 17:00 CET (close enough to 17:30)
-    21: 'evening',   # 22:00 CET
-}
+
+def _utc_instant(now: datetime | None = None) -> datetime:
+    """Return one validated UTC instant for an entire routine."""
+    checked_at = now or datetime.now(timezone.utc)
+    if checked_at.tzinfo is None or checked_at.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    return checked_at.astimezone(timezone.utc)
 
 
 def main():
@@ -62,7 +64,6 @@ def main():
     
     # Initialize components
     db = Database()
-    yahoo = YahooDataFetcher()
     analyzer = MarketAnalyzer(db)
     trader = PaperTrader(db)
     
@@ -70,21 +71,18 @@ def main():
     brain = None
     try:
         brain = TradingBrain(db)
-        logger.info("🧠 AI Brain initialized (Claude Sonnet)")
+        logger.info(
+            "🧠 AI Brain initialized (%s / %s)",
+            brain.backend,
+            brain.model,
+        )
     except Exception as e:
         logger.warning(f"⚠️ AI Brain not available: {e}")
     
     # Initialize study module
     student = None
     try:
-        # Web search function for student (if available)
-        try:
-            from ..utils.web_search import web_search_function
-            web_search_func = web_search_function
-        except:
-            web_search_func = None
-        
-        student = TradingStudent(db, web_search_func)
+        student = TradingStudent(db)
         logger.info("📚 Trading Student initialized")
     except Exception as e:
         logger.warning(f"⚠️ Trading Student not available: {e}")
@@ -95,10 +93,15 @@ def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else None
     
     if mode and mode == 'daemon':
-        run_daemon(yahoo, db, analyzer, trader, brain, student)
+        run_daemon(db, analyzer, trader, brain, student)
     elif mode == 'brain':
         if brain:
-            result = brain.run_cycle(trader, deep=True)
+            manual_slot = int(datetime.now(timezone.utc).timestamp() // 60)
+            result = brain.run_cycle(
+                trader,
+                deep=True,
+                cycle_key=f"manual-brain:{manual_slot}",
+            )
             logger.info(f"🧠 Brain result: {result}")
         else:
             logger.error("Brain not available")
@@ -115,73 +118,168 @@ def main():
         else:
             logger.error("Student not available")
     elif mode:
-        run_mode(mode, yahoo, db, analyzer, trader, brain, student)
+        run_mode(mode, db, analyzer, trader, brain, student)
         logger.info("✅ Agent routine complete")
     else:
-        run_daemon(yahoo, db, analyzer, trader, brain, student)
+        run_daemon(db, analyzer, trader, brain, student)
 
 
-def run_daemon(yahoo, db, analyzer, trader, brain=None, student=None):
+def run_daemon(db, analyzer, trader, brain=None, student=None):
     """Run as a long-lived daemon with scheduled routines.
     
     Schedule:
-    - Every 10 min during market hours: update prices, TA, news
-    - Every 30 min during market hours (08:00-16:30 UTC): brain cycle
+    - Every 10 min during market hours: validate provider data and run TA
+    - Every 15 min during the explicit XSTO market session: brain cycle
     - Every 60 min OUTSIDE market hours: student study cycle
     - Every 2 hours on weekends: deep study cycle
-    - 06:00 UTC: morning deep analysis
-    - 17:00 UTC: daily summary
+    - 07:00 Europe/Stockholm: morning deep analysis
+    - 17:40 Europe/Stockholm: daily summary
     """
     logger.info("🔄 Running in daemon mode — market/study cycles every 10/60 minutes")
     
-    last_scheduled_hour = -1
-    last_brain_minute = -1  # Track last brain run (30-min intervals)
-    last_study_hour = -1   # Track last study run (60-min intervals)
+    completed_routines = set()
     
     while True:
         try:
-            now = datetime.utcnow()
-            current_hour = now.hour
-            current_minute = now.minute
-            
-            # ------ SCHEDULED ROUTINES (once per hour) ------
-            if current_hour != last_scheduled_hour:
-                
-                # 06:00 UTC: Morning deep analysis with brain
-                if current_hour == 6:
-                    logger.info("🌅 06:00 UTC — Morning deep analysis")
-                    run_morning_routine(yahoo, db, analyzer)
-                    if brain:
-                        try:
-                            result = brain.run_cycle(trader, deep=True)
-                            logger.info(f"🧠 Morning brain: {result['decisions_executed']} trades")
-                        except Exception as e:
-                            logger.error(f"Morning brain error: {e}")
-                    last_scheduled_hour = current_hour
-                
-                # 17:00 UTC: Daily summary
-                elif current_hour == 17:
-                    logger.info("🌆 17:00 UTC — Daily summary")
-                    run_eod_routine(yahoo, db, analyzer, trader)
-                    if brain:
-                        try:
+            now = datetime.now(timezone.utc)
+            local_now = stockholm_now(now)
+
+            try:
+                for session_date in (
+                    local_now.date() - timedelta(days=1),
+                    local_now.date(),
+                ):
+                    completed_routines.update(
+                        db.get_successful_scheduled_routine_keys(session_date)
+                    )
+                schedule_evidence_ready = True
+            except Exception:
+                logger.error(
+                    "Scheduled routine evidence is unavailable; "
+                    "scheduled execution is paused"
+                )
+                schedule_evidence_ready = False
+
+            if schedule_evidence_ready:
+                current_routines = due_routines(
+                    now,
+                    completed=completed_routines,
+                )
+                current_keys = {routine.key for routine in current_routines}
+                recovered_routines = tuple(
+                    routine
+                    for routine in recoverable_routines(
+                        now,
+                        completed=completed_routines,
+                    )
+                    if routine.key not in current_keys
+                )
+                routines = tuple(current_routines) + recovered_routines
+            else:
+                routines = ()
+            for routine in routines:
+                logger.info(
+                    f"⏰ Scheduled run: {routine.name} "
+                    f"({routine.scheduled_at.strftime('%H:%M %Z')})"
+                )
+                try:
+                    if routine.name == 'morning':
+                        run_morning_routine(db, analyzer)
+                        if brain and not routine.recovery:
+                            result = brain.run_cycle(
+                                trader,
+                                deep=True,
+                                cycle_key=(
+                                    "scheduled-morning:"
+                                    f"{routine.scheduled_at.isoformat()}"
+                                ),
+                            )
+                            logger.info(
+                                f"🧠 Morning brain: "
+                                f"{result['decisions_executed']} trades"
+                            )
+                    elif routine.name == 'close':
+                        run_eod_routine(db, analyzer, trader)
+                        if brain:
                             summary = brain.generate_daily_summary()
                             logger.info(f"🧠 Daily summary: {summary}")
-                        except Exception as e:
-                            logger.error(f"Daily summary error: {e}")
-                    last_scheduled_hour = current_hour
-                
-                # Other scheduled hours
-                elif current_hour in SCHEDULE_UTC:
-                    mode = SCHEDULE_UTC[current_hour]
-                    logger.info(f"⏰ Scheduled run: {mode} (UTC {current_hour}:00)")
-                    run_mode(mode, yahoo, db, analyzer, trader, brain)
-                    last_scheduled_hour = current_hour
-            
-            # ------ EVERY 10 MIN DURING MARKET HOURS ------
-            if 7 <= current_hour <= 17:
-                logger.info(f"📊 Price update + TA (UTC {now.strftime('%H:%M')})")
-                yahoo.update_all_prices(db)
+                    else:
+                        run_mode(
+                            routine.name,
+                            db,
+                            analyzer,
+                            trader,
+                            brain,
+                            student,
+                            now=now,
+                        )
+                except Exception as e:
+                    try:
+                        db.record_scheduled_routine_event(
+                            routine_key=routine.key,
+                            routine_name=routine.name,
+                            scheduled_at=routine.scheduled_at,
+                            status="FAILED",
+                            failure_code="ROUTINE_EXECUTION_ERROR",
+                            observed_at=datetime.now(timezone.utc),
+                        )
+                    except Exception:
+                        logger.error(
+                            "Failed to persist scheduled routine failure"
+                        )
+                    logger.error(
+                        f"Scheduled {routine.name} error: {e}",
+                        exc_info=True,
+                    )
+                else:
+                    try:
+                        db.record_scheduled_routine_event(
+                            routine_key=routine.key,
+                            routine_name=routine.name,
+                            scheduled_at=routine.scheduled_at,
+                            status="SUCCEEDED",
+                            failure_code=None,
+                            observed_at=datetime.now(timezone.utc),
+                        )
+                    except Exception:
+                        logger.error(
+                            "Failed to persist scheduled routine success"
+                        )
+                    completed_routines.add(routine.key)
+
+            retained_dates = {
+                (local_now.date() - timedelta(days=1)).isoformat(),
+                local_now.date().isoformat(),
+            }
+            completed_routines = {
+                key
+                for key in completed_routines
+                if any(key.startswith(day) for day in retained_dates)
+            }
+
+            try:
+                market_session = db.get_market_session(
+                    'XSTO',
+                    local_now.date(),
+                )
+                market_open = (
+                    market_session is not None
+                    and market_session.is_open(now)
+                )
+            except Exception as e:
+                logger.error(
+                    f"Market calendar unavailable: {e}",
+                    exc_info=True,
+                )
+                market_open = False
+
+            # ------ EVERY 10 MIN DURING AN EXPLICIT MARKET SESSION ------
+            if market_open:
+                logger.info(
+                    f"📊 Provider-data validation + TA "
+                    f"({local_now.strftime('%H:%M %Z')})"
+                )
+                db.require_operational_market_data(now)
                 
                 # Technical analysis after price update
                 try:
@@ -192,62 +290,253 @@ def run_daemon(yahoo, db, analyzer, trader, brain=None, student=None):
                 except Exception as e:
                     logger.error(f"Technical analysis error: {e}")
                 
-                # News update
-                try:
-                    news_fetcher = NewsFetcher(db)
-                    news_fetcher.update_news()
-                except Exception as e:
-                    logger.error(f"News update error: {e}")
-                
-                trader.check_positions()
+                trader.check_positions(now=now)
                 db.save_portfolio_snapshot()
                 
-                # ------ BRAIN CYCLE EVERY 30 MIN (08:00-16:30 UTC) ------
-                brain_slot = current_hour * 60 + (current_minute // 30) * 30
-                if (brain and 8 <= current_hour <= 16 
-                    and brain_slot != last_brain_minute):
-                    logger.info(f"🧠 Brain cycle (UTC {now.strftime('%H:%M')})")
+                # ------ DURABLE BRAIN CYCLE SLOTS WHILE MARKET IS OPEN ------
+                if brain:
                     try:
-                        result = brain.run_cycle(trader, deep=False)
-                        logger.info(
-                            f"🧠 Brain: {result['outlook']} | "
-                            f"{result['decisions_executed']} executed"
+                        latest_brain_slot = (
+                            db.get_latest_terminal_scheduled_job_at(
+                                "brain_cycle"
+                            )
+                        )
+                        session_opens_at = getattr(
+                            market_session,
+                            "opens_at",
+                            None,
+                        )
+                        if (
+                            latest_brain_slot is not None
+                            and session_opens_at is not None
+                            and latest_brain_slot < session_opens_at
+                        ):
+                            latest_brain_slot = session_opens_at - timedelta(
+                                minutes=BRAIN_CYCLE_INTERVAL_MINUTES
+                            )
+                        brain_slots = recovery_slots(
+                            now,
+                            interval_minutes=BRAIN_CYCLE_INTERVAL_MINUTES,
+                            last_completed_at=latest_brain_slot,
+                            max_backfill_slots=40,
                         )
                     except Exception as e:
-                        logger.error(f"Brain cycle error: {e}", exc_info=True)
-                    last_brain_minute = brain_slot
-            else:
-                # ------ STUDENT CYCLE OUTSIDE MARKET HOURS ------
-                if student and current_hour != last_study_hour:
-                    # Weekend deep study (every 2 hours)
-                    if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
-                        if current_hour % 2 == 0:  # Even hours: 0, 2, 4, 6...
-                            logger.info(f"📚🔬 Weekend deep study (UTC {now.strftime('%H:%M')})")
-                            try:
-                                result = student.deep_study()
-                                logger.info(f"📚 Deep study: {len(result['studies_completed'])} studies, "
-                                           f"{result['insights_generated']} insights, "
-                                           f"{result['learnings_added']} learnings")
-                            except Exception as e:
-                                logger.error(f"Deep study error: {e}", exc_info=True)
-                            last_study_hour = current_hour
-                    
-                    # Regular study cycle (every hour outside market hours)
-                    else:
-                        logger.info(f"📚 Study cycle (UTC {now.strftime('%H:%M')})")
+                        logger.error(
+                            f"Brain schedule evidence unavailable: {e}",
+                            exc_info=True,
+                        )
+                        brain_slots = ()
+
+                    for slot_at in brain_slots:
+                        brain_slot = brain_cycle_slot(slot_at)
+                        cycle_key = f"scheduled-brain:{brain_slot}"
+                        is_current = slot_at == brain_slots[-1]
+                        run_kind = "CURRENT" if is_current else "STALE_SKIP"
+                        claimed_at = now
                         try:
-                            result = student.study_cycle()
-                            if result.get('studies_completed'):
-                                logger.info(f"📚 Study: {result['studies_completed']}")
-                            if result.get('insights_generated', 0) > 0:
-                                logger.info(f"💡 Generated {result['insights_generated']} insights")
-                            if result.get('learnings_added', 0) > 0:
-                                logger.info(f"📚 Added {result['learnings_added']} learnings")
+                            claimed = db.claim_scheduled_job_run(
+                                job_key=cycle_key,
+                                job_name="brain_cycle",
+                                scheduled_at=slot_at,
+                                observed_at=claimed_at,
+                                run_kind=run_kind,
+                            )
                         except Exception as e:
-                            logger.error(f"Study cycle error: {e}", exc_info=True)
-                        last_study_hour = current_hour
-                
-                logger.debug(f"💤 Outside market hours (UTC {current_hour}:00)")
+                            logger.error(
+                                f"Brain slot claim failed: {e}",
+                                exc_info=True,
+                            )
+                            continue
+                        if not claimed:
+                            continue
+
+                        if not is_current:
+                            db.complete_scheduled_job_run(
+                                job_key=cycle_key,
+                                claimed_at=claimed_at,
+                                status="SKIPPED_STALE",
+                                observed_at=now,
+                            )
+                            logger.warning(
+                                "brain_cycle_skipped_stale slot=%d scheduled_at=%s",
+                                brain_slot,
+                                slot_at.isoformat(),
+                            )
+                            continue
+
+                        logger.info(
+                            "brain_cycle_started slot=%d interval_minutes=%d "
+                            "local_time=%s",
+                            brain_slot,
+                            BRAIN_CYCLE_INTERVAL_MINUTES,
+                            local_now.strftime("%H:%M %Z"),
+                        )
+                        try:
+                            refreshed = analyzer.update_prospects(now=now)
+                            logger.info(
+                                "📋 Refreshed %d current prospects",
+                                refreshed,
+                            )
+                            result = brain.run_cycle(
+                                trader,
+                                deep=False,
+                                cycle_key=cycle_key,
+                            )
+                            db.complete_scheduled_job_run(
+                                job_key=cycle_key,
+                                claimed_at=claimed_at,
+                                status="SUCCEEDED",
+                                observed_at=now,
+                            )
+                            logger.info(
+                                "brain_cycle_completed slot=%d outlook=%s "
+                                "raw=%d validated=%d executed=%d",
+                                brain_slot,
+                                result["outlook"],
+                                result["decisions_raw"],
+                                result["decisions_validated"],
+                                result["decisions_executed"],
+                            )
+                        except Exception as e:
+                            try:
+                                db.complete_scheduled_job_run(
+                                    job_key=cycle_key,
+                                    claimed_at=claimed_at,
+                                    status="FAILED",
+                                    failure_code="BRAIN_CYCLE_ERROR",
+                                    observed_at=now,
+                                )
+                            except Exception:
+                                logger.error(
+                                    "Failed to persist brain cycle failure",
+                                    exc_info=True,
+                                )
+                            logger.error(
+                                f"Brain cycle error: {e}",
+                                exc_info=True,
+                            )
+            else:
+                # ------ DURABLE STUDENT SLOTS OUTSIDE MARKET HOURS ------
+                if student:
+                    try:
+                        latest_study_slot = (
+                            db.get_latest_terminal_scheduled_job_at(
+                                "student_study"
+                            )
+                        )
+                        study_slots = recovery_slots(
+                            now,
+                            interval_minutes=60,
+                            last_completed_at=latest_study_slot,
+                            max_backfill_slots=6,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Study schedule evidence unavailable: {e}",
+                            exc_info=True,
+                        )
+                        study_slots = ()
+
+                    for slot_at in study_slots:
+                        local_slot = stockholm_now(slot_at)
+                        slot_id = int(slot_at.timestamp() // 3600)
+                        job_key = f"scheduled-study:{slot_id}"
+                        weekend_idle = (
+                            local_slot.weekday() >= 5
+                            and local_slot.hour % 2 != 0
+                        )
+                        run_kind = (
+                            "STALE_SKIP"
+                            if weekend_idle
+                            else (
+                                "CURRENT"
+                                if slot_at == study_slots[-1]
+                                else "RECOVERY"
+                            )
+                        )
+                        claimed_at = now
+                        try:
+                            claimed = db.claim_scheduled_job_run(
+                                job_key=job_key,
+                                job_name="student_study",
+                                scheduled_at=slot_at,
+                                observed_at=claimed_at,
+                                run_kind=run_kind,
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Study slot claim failed: {e}",
+                                exc_info=True,
+                            )
+                            continue
+                        if not claimed:
+                            continue
+
+                        if weekend_idle:
+                            db.complete_scheduled_job_run(
+                                job_key=job_key,
+                                claimed_at=claimed_at,
+                                status="SKIPPED_STALE",
+                                observed_at=now,
+                            )
+                            continue
+
+                        try:
+                            if local_slot.weekday() >= 5:
+                                logger.info(
+                                    "📚🔬 Weekend deep study (%s)",
+                                    local_slot.strftime("%H:%M %Z"),
+                                )
+                                result = student.deep_study(now=slot_at)
+                            else:
+                                logger.info(
+                                    "📚 Study cycle (%s)",
+                                    local_slot.strftime("%H:%M %Z"),
+                                )
+                                result = student.study_cycle(now=slot_at)
+                            db.complete_scheduled_job_run(
+                                job_key=job_key,
+                                claimed_at=claimed_at,
+                                status="SUCCEEDED",
+                                observed_at=now,
+                            )
+                            if result.get("studies_completed"):
+                                logger.info(
+                                    "📚 Study: %s",
+                                    result["studies_completed"],
+                                )
+                            if result.get("insights_generated", 0) > 0:
+                                logger.info(
+                                    "💡 Generated %d insights",
+                                    result["insights_generated"],
+                                )
+                            if result.get("learnings_added", 0) > 0:
+                                logger.info(
+                                    "📚 Added %d learnings",
+                                    result["learnings_added"],
+                                )
+                        except Exception as e:
+                            try:
+                                db.complete_scheduled_job_run(
+                                    job_key=job_key,
+                                    claimed_at=claimed_at,
+                                    status="FAILED",
+                                    failure_code="STUDY_CYCLE_ERROR",
+                                    observed_at=now,
+                                )
+                            except Exception:
+                                logger.error(
+                                    "Failed to persist study cycle failure",
+                                    exc_info=True,
+                                )
+                            logger.error(
+                                f"Study cycle error: {e}",
+                                exc_info=True,
+                            )
+
+                logger.debug(
+                    f"💤 XSTO closed ({local_now.strftime('%H:%M %Z')})"
+                )
             
             # Sleep 10 minutes between checks
             time.sleep(600)
@@ -260,94 +549,82 @@ def run_daemon(yahoo, db, analyzer, trader, brain=None, student=None):
             time.sleep(60)
 
 
-def run_mode(mode: str, yahoo, db, analyzer, trader, brain=None, student=None):
+def run_mode(
+    mode: str,
+    db,
+    analyzer,
+    trader,
+    brain=None,
+    student=None,
+    *,
+    now: datetime | None = None,
+):
     """Run a specific mode."""
     logger.info(f"🎯 Running mode: {mode}")
     
     if mode == 'morning':
-        run_morning_routine(yahoo, db, analyzer)
+        run_morning_routine(db, analyzer)
     elif mode == 'open':
-        run_market_open_routine(yahoo, db, analyzer, trader)
+        run_market_open_routine(db, analyzer, trader, now=now)
     elif mode == 'midday':
-        run_midday_routine(yahoo, db, trader)
+        run_midday_routine(db, trader, now=now)
     elif mode == 'close':
-        run_eod_routine(yahoo, db, analyzer, trader)
+        run_eod_routine(db, analyzer, trader)
     elif mode == 'evening':
-        run_evening_routine(db, analyzer, trader)
+        run_evening_routine(db, analyzer, trader, now=now)
     elif mode == 'analyze':
-        run_full_analysis(yahoo, db, analyzer)
+        run_full_analysis(db, analyzer)
     elif mode == 'snapshot':
         db.save_portfolio_snapshot()
-    elif mode == 'update':
-        yahoo.update_all_prices(db)
-        yahoo.update_macro_data(db)
     elif mode == 'prospects':
         analyzer.update_prospects()
     elif mode == 'student':
         if student:
-            result = student.study_cycle()
+            result = student.study_cycle(now=now)
             logger.info(f"📚 Student cycle result: {result}")
         else:
             logger.error("Student not available")
     elif mode == 'deep_study':
         if student:
-            result = student.deep_study()
+            result = student.deep_study(now=now)
             logger.info(f"📚 Deep study result: {result}")
         else:
             logger.error("Student not available")
     else:
         logger.warning(f"Unknown mode: {mode}")
-        logger.info("Available modes: morning, open, midday, close, evening, analyze, snapshot, update, prospects, student, deep_study")
+        logger.info("Available modes: morning, open, midday, close, evening, analyze, snapshot, prospects, student, deep_study")
 
 
-def run_scheduled(hour: int, yahoo, db, analyzer, trader):
+def run_scheduled(hour: int, db, analyzer, trader):
     """Run routine based on current hour."""
     
     if hour == 7:
-        run_morning_routine(yahoo, db, analyzer)
+        run_morning_routine(db, analyzer)
     elif hour == 9:
-        run_market_open_routine(yahoo, db, analyzer, trader)
+        run_market_open_routine(db, analyzer, trader)
     elif hour == 12:
-        run_midday_routine(yahoo, db, trader)
+        run_midday_routine(db, trader)
     elif hour in [17, 18]:
-        run_eod_routine(yahoo, db, analyzer, trader)
+        run_eod_routine(db, analyzer, trader)
     elif hour == 22:
         run_evening_routine(db, analyzer, trader)
     else:
-        # Ad-hoc run: just update data and snapshot
-        logger.info("🔄 Ad-hoc run - updating data...")
-        yahoo.update_all_prices(db)
-        yahoo.update_macro_data(db)
+        logger.info("🔄 Ad-hoc run - saving provider-valued snapshot...")
         db.save_portfolio_snapshot()
 
 
-def run_morning_routine(yahoo, db, analyzer):
+def run_morning_routine(db, analyzer):
     """
     Pre-market analysis routine (07:00).
-    - Update macro data
-    - Fetch news and analyze sentiment
+    - Use already ingested research context
     - Generate morning briefing
     - Update prospects
     """
     logger.info("🌅 Morning routine starting...")
-    
-    # Update macro data first
-    yahoo.update_macro_data(db)
-    
-    # Update stock prices
-    yahoo.update_all_prices(db)
-    
-    # Fetch and analyze news
-    logger.info("📰 Fetching news...")
-    news_fetcher = NewsFetcher(db)
-    try:
-        news = news_fetcher.fetch_all_news()
-        news_fetcher.save_news(news)
-        news_briefing = news_fetcher.generate_news_briefing()
-        logger.info(news_briefing)
-    except Exception as e:
-        logger.warning(f"News fetch failed: {e}")
-        news_briefing = "Nyheter ej tillgängliga"
+    logger.info(
+        "📰 External news and report scrapers are disabled until an "
+        "authorized provider with provenance is configured"
+    )
     
     # Technical analysis
     logger.info("📈 Running technical analysis...")
@@ -359,14 +636,6 @@ def run_morning_routine(yahoo, db, analyzer):
     except Exception as e:
         logger.warning(f"Technical analysis failed: {e}")
     
-    # Update report calendar
-    logger.info("📅 Updating report calendar...")
-    try:
-        report_tracker = ReportTracker(db)
-        report_tracker.update_report_calendar()
-    except Exception as e:
-        logger.warning(f"Report calendar update failed: {e}")
-    
     # Generate morning briefing
     briefing = analyzer.generate_morning_briefing()
     
@@ -377,7 +646,13 @@ def run_morning_routine(yahoo, db, analyzer):
     return briefing
 
 
-def run_market_open_routine(yahoo, db, analyzer, trader):
+def run_market_open_routine(
+    db,
+    analyzer,
+    trader,
+    *,
+    now: datetime | None = None,
+):
     """
     Market open routine (09:00).
     - Fresh price update
@@ -386,11 +661,11 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     """
     logger.info("📈 Market open routine starting...")
     
-    # Fresh price update
-    yahoo.update_all_prices(db)
+    checked_at = _utc_instant(now)
+    db.require_operational_market_data(checked_at)
     
     # Find opportunities (for Börje to review)
-    opportunities = analyzer.find_opportunities()
+    opportunities = analyzer.find_opportunities(now=checked_at)
     
     if opportunities:
         logger.info(f"📋 {len(opportunities)} opportunities found (awaiting Börje's decision)")
@@ -398,10 +673,10 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
             logger.info(f"   {opp['ticker']}: {opp['confidence']:.0f}% — {opp.get('thesis', 'N/A')}")
     
     # Auto stop-loss/take-profit on existing positions (mechanical, no brain needed)
-    trader.check_positions()
+    trader.check_positions(now=checked_at)
     
-    # Update prospects
-    analyzer.update_prospects()
+    # Update prospects from the same authorised clock.
+    analyzer.update_prospects(now=checked_at)
     
     # Save snapshot
     db.save_portfolio_snapshot()
@@ -410,20 +685,20 @@ def run_market_open_routine(yahoo, db, analyzer, trader):
     return opportunities
 
 
-def run_midday_routine(yahoo, db, trader):
+def run_midday_routine(db, trader, *, now: datetime | None = None):
     """
     Midday check (12:00).
-    - Update prices
+    - Validate complete provider data
     - Check positions for stop-loss/take-profit
     - Save snapshot
     """
     logger.info("☀️ Midday routine starting...")
     
-    # Update prices
-    yahoo.update_all_prices(db)
+    checked_at = _utc_instant(now)
+    db.require_operational_market_data(checked_at)
     
     # Check positions
-    trader.check_positions()
+    trader.check_positions(now=checked_at)
     
     # Save snapshot
     db.save_portfolio_snapshot()
@@ -431,19 +706,14 @@ def run_midday_routine(yahoo, db, trader):
     logger.info("✅ Midday routine complete")
 
 
-def run_eod_routine(yahoo, db, analyzer, trader):
+def run_eod_routine(db, analyzer, trader):
     """
     End of day routine (17:30).
-    - Final price update
     - Daily performance log
     - Day analysis
     - Update prospects
     """
     logger.info("🌆 End of day routine starting...")
-    
-    # Final price update
-    yahoo.update_all_prices(db)
-    yahoo.update_macro_data(db)
     
     # Log daily performance
     trader.log_daily_performance()
@@ -461,7 +731,13 @@ def run_eod_routine(yahoo, db, analyzer, trader):
     return day_stats
 
 
-def run_evening_routine(db, analyzer, trader):
+def run_evening_routine(
+    db,
+    analyzer,
+    trader,
+    *,
+    now: datetime | None = None,
+):
     """
     Evening routine (22:00).
     - Validate old hypotheses (learning!)
@@ -469,37 +745,54 @@ def run_evening_routine(db, analyzer, trader):
     - Extract learnings
     """
     logger.info("🌙 Evening routine starting...")
+
+    checked_at = _utc_instant(now)
+    local_now = stockholm_now(checked_at)
     
     # Validate hypotheses from trades 14+ days old
-    validated = trader.validate_hypotheses(days_to_check=14)
+    validated = trader.validate_hypotheses(
+        days_to_check=14,
+        now=checked_at,
+    )
     
     # Weekly review on Fridays
-    if datetime.now().weekday() == 4:
+    if local_now.weekday() == 4:
         logger.info("📝 Friday - running weekly review...")
-        trader.run_weekly_review()
+        trader.run_weekly_review(now=checked_at)
     
     # Extract learnings
     trader.extract_learnings()
     
+    outcome_recorder = getattr(
+        db,
+        "record_candidate_prediction_outcomes",
+        None,
+    )
+    if callable(outcome_recorder):
+        labelled = outcome_recorder(evaluated_at=checked_at)
+        logger.info(
+            "candidate_outcomes_labelled phase=evening count=%d",
+            labelled,
+        )
+
     # Save snapshot
-    db.save_portfolio_snapshot()
+    db.save_portfolio_snapshot(recorded_at=checked_at)
+    db.record_post_close_benchmark_observation(
+        observed_at=checked_at,
+    )
     
     logger.info("✅ Evening routine complete")
     return validated
 
 
-def run_full_analysis(yahoo, db, analyzer):
+def run_full_analysis(db, analyzer):
     """
     Full analysis routine (ad-hoc).
-    - Update all data
+    - Use validated ingested data
     - Full market scan
     - Generate reports
     """
     logger.info("🔬 Full analysis starting...")
-    
-    # Update everything
-    yahoo.update_all_prices(db)
-    yahoo.update_macro_data(db)
     
     # Morning briefing
     briefing = analyzer.generate_morning_briefing()

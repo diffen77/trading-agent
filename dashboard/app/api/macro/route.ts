@@ -1,23 +1,32 @@
 import { NextResponse } from 'next/server'
-import { Pool } from 'pg'
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+import {
+  databaseUnavailable,
+  getDatabasePool,
+} from '@/lib/server/database'
+import {
+  loadOperationalStatus,
+} from '@/lib/server/operational-status.mjs'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
-    const result = await pool.query(`
-      SELECT symbol, type, value, change_pct, date
-      FROM macro
-      ORDER BY type, symbol
-    `)
-    
-    return NextResponse.json(result.rows)
+    const status = await loadOperationalStatus(getDatabasePool())
+    const signal = status.index
+    return NextResponse.json(
+      signal?.symbol === 'OMXSGI'
+        ? [{
+            symbol: signal.symbol,
+            type: 'index',
+            value: signal.current_level,
+            change_pct: signal.change_pct,
+            date: signal.event_time,
+          }]
+        : [],
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
   } catch (error) {
-    console.error('Error fetching macro:', error)
-    return NextResponse.json([])
+    return databaseUnavailable('fetch authorized market index', error)
   }
 }
