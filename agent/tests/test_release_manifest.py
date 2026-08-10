@@ -81,10 +81,20 @@ def _values():
         "dashboard_image": (
             "ghcr.io/diffen77/trading-agent/dashboard@sha256:" + "c" * 64
         ),
-        "schema_min": 43,
-        "schema_max": 43,
+        "schema_min": 44,
+        "schema_max": 44,
         "created_at": "2026-07-29T12:00:00Z",
     }
+
+
+def test_release_manifest_targets_latest_database_schema():
+    module = _load_module()
+    migration_versions = [
+        int(path.name.split("_", 1)[0])
+        for path in (ROOT / "db" / "migrations").glob("[0-9][0-9][0-9]_*.sql")
+    ]
+
+    assert module.REQUIRED_SCHEMA == max(migration_versions)
 
 
 def test_agent_runtime_image_excludes_test_only_dependencies_and_state():
@@ -251,8 +261,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
     )
 
     assert manifest.release_sha == "a" * 40
-    assert manifest.schema_min == 43
-    assert manifest.schema_max == 43
+    assert manifest.schema_min == 44
+    assert manifest.schema_max == 44
     assert manifest.agent_image.endswith("b" * 64)
     assert manifest_path.read_text().splitlines() == [
         f"RELEASE_SHA={'a' * 40}",
@@ -264,8 +274,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
             "DASHBOARD_IMAGE=ghcr.io/diffen77/trading-agent/"
             f"dashboard@sha256:{'c' * 64}"
         ),
-        "SCHEMA_MIN=43",
-        "SCHEMA_MAX=43",
+        "SCHEMA_MIN=44",
+        "SCHEMA_MAX=44",
         "CREATED_AT=2026-07-29T12:00:00Z",
     ]
 
@@ -462,7 +472,7 @@ def _fake_docker(tmp_path):
         """#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
-  *" exec -T db psql "*) printf '43\n' ;;
+  *" exec -T db psql "*) printf '44\n' ;;
   *" exec -T agent python -m src.healthcheck readiness"*)
     if [ -n "$FAIL_SHA" ]; then
       case "$*" in
