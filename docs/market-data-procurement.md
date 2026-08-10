@@ -263,6 +263,14 @@ Följande återstår innan ett providerbevis kan bli `PASSED`:
 - fem hela sessioners coverage-, gap-, leverans- och restarttest;
 - samtidig verifiering av pre-trade, post-trade och `OMXSGI`.
 
+Efter faktisk leverans ska råpaketet först passera den lokala,
+read-only kontrollen i `historical_data_preflight`. Den verifierar
+avtalsfil, rättighets- och fullständighetsintyg, obligatoriska
+artefaktroller och varje SHA-256 utan att importera data. En
+formatspecifik adapter får inte implementeras mot en gissad
+leverantörsstruktur; den tas fram mot det verkliga provuttaget efter
+produktvalet.
+
 ## Acceptanstest före aktivering
 
 ### Juridik och produkt

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "contract_key": "replace-with-validated-contract-key",
+  "provider": "replace-with-provider",
+  "product_name": "replace-with-exact-product",
+  "terms_url": "https://replace-with-exact-terms-url",
+  "mic": "XSTO",
+  "period_start": "2020-01-01",
+  "period_end": "2025-12-31",
+  "data_cutoff": "2026-01-02T18:00:00Z",
+  "declared_trading_sessions": 1500,
+  "benchmark_symbol": "OMXSGI",
+  "risk_index_symbol": "OMXSGI",
+  "prepared_by": "operator:replace-me",
+  "declarations": {
+    "rights_confirmed_for_internal_backtest": true,
+    "raw_storage_allowed": true,
+    "derived_storage_allowed": true,
+    "raw_unadjusted_prices": true,
+    "corporate_actions_complete": true,
+    "universe_history_complete": true,
+    "includes_inactive_and_delisted": true,
+    "benchmark_is_total_return": true
+  },
+  "files": [
+    {
+      "role": "PROVIDER_TERMS",
+      "path": "provider-terms.pdf",
+      "sha256": "replace-with-64-lowercase-hex-characters",
+      "media_type": "application/pdf"
+    },
+    {
+      "role": "UNIVERSE_HISTORY",
+      "path": "universe-history.dat",
+      "sha256": "replace-with-64-lowercase-hex-characters",
+      "media_type": "application/octet-stream"
+    },
+    {
+      "role": "DAILY_OHLCV",
+      "path": "daily-ohlcv.dat",
+      "sha256": "replace-with-64-lowercase-hex-characters",
+      "media_type": "application/octet-stream"
+    },
+    {
+      "role": "CORPORATE_ACTIONS",
+      "path": "corporate-actions.dat",
+      "sha256": "replace-with-64-lowercase-hex-characters",
+      "media_type": "application/octet-stream"
+    },
+    {
+      "role": "OMXSGI_TOTAL_RETURN",
+      "path": "omxsgi-total-return.dat",
+      "sha256": "replace-with-64-lowercase-hex-characters",
+      "media_type": "application/octet-stream"
+    },
+    {
+      "role": "MARKET_CALENDAR",
+      "path": "xsto-calendar.dat",
+      "sha256": "replace-with-64-lowercase-hex-characters",
+      "media_type": "application/octet-stream"
+    }
+  ]
+}

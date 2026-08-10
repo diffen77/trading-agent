@@ -76,6 +76,24 @@ nedgång efter föregående folds topp inte nollställs.
 
 ## Operatörsflöde
 
+När leverantören har lämnat råfilerna kopieras
+`historical-delivery-manifest.example.json` till leveransmappen och
+fylls med exakt produkt, avtalsnyckel, rättighetsintyg, filnamn och
+SHA-256. Kontrollera leveransen innan en formatspecifik adapter skrivs:
+
+```bash
+docker compose exec agent python -m src.historical_data_preflight \
+  --manifest /app/data/history-delivery/delivery.json
+```
+
+Preflighten är read-only och kräver separata, checksummebundna
+artefakter för villkor, point-in-time-universum, rå OHLCV, corporate
+actions, OMXSGI total return och XSTO-kalender. Ett godkänt svar betyder
+bara `ready_for_adapter_mapping`; det betyder uttryckligen inte att
+datasetet är importerat, validerat eller redo för backtest. Exakt
+ISO/XML/TIP/API-mappning implementeras först när vald produkt och ett
+verkligt provuttag finns.
+
 När en historikimport har skapat ett `DRAFT`-dataset:
 
 ```bash
