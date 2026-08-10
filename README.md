@@ -7,6 +7,7 @@ AI-assisterad papertrading för aktier på Nasdaq Stockholm.
 - [Aktuellt verifierat läge](docs/CURRENT_STATE.md)
 - [Systemöversikt](docs/ARCHITECTURE.md)
 - [Aktiva arbetsströmmar](docs/WORKSTREAMS.md)
+- [Morgonöverlämning och beslut](docs/MORNING_HANDOFF.md)
 - [Roadmap](ROADMAP.md)
 - [Drift och releaser](docs/operations.md)
 - [Historisk journal](STATE.md)
@@ -157,7 +158,7 @@ Nasdaqs officiella XSTO-kalender för 2024–2026 är versionsstyrd,
 inklusive helgdagar och halvdagar. Okända år, saknad session eller
 för gammal prisdata stoppar handel fail-closed.
 
-Databasschema 44, public-policy-kontrakt, freshness-gate och en
+Databasschema 45, public-policy-kontrakt, freshness-gate och en
 aktiverbar `market-sync` finns på plats. Systemet handlar inte förrän
 instrument, marknadssession och en färsk exekverbar orderbok faktiskt
 har importerats.

@@ -141,4 +141,19 @@ reason codes. They contain no raw model prompts, credentials or market payloads.
 - Dashboard states how many observations exist and never calls an unevaluated
   observation a learning.
 - Current paper trading continues with the unchanged active strategy.
-- All tests and staging readiness checks pass with schema 40.
+- All tests pass against a freshly migrated schema 45 database. Staging
+  readiness must be re-verified after the separately approved schema-45
+  transition.
+
+## Learning terminology
+
+Candidate predictions, their later outcome labels and calibration runs are
+measured observations. They are useful even when the legacy `learnings` table
+is empty. A row in that table is reserved for a governed, evidence-backed
+interpretation that may support a separate strategy proposal.
+
+The legacy trade-review path therefore remains fail-closed until authorised
+historical bars and corporate actions have been imported. Candidate-policy
+calibration may create a `DRAFT` challenger automatically, but an operator must
+approve it and then activate it through two distinct actions. Neither step is
+performed by the learning worker.
