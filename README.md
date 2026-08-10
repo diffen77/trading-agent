@@ -2,6 +2,15 @@
 
 AI-assisterad papertrading för aktier på Nasdaq Stockholm.
 
+## Börja här
+
+- [Aktuellt verifierat läge](docs/CURRENT_STATE.md)
+- [Systemöversikt](docs/ARCHITECTURE.md)
+- [Aktiva arbetsströmmar](docs/WORKSTREAMS.md)
+- [Roadmap](ROADMAP.md)
+- [Drift och releaser](docs/operations.md)
+- [Historisk journal](STATE.md)
+
 ## Vision
 
 Agenten ska analysera marknad, bolag, nyheter och makrodata, fatta
@@ -85,6 +94,9 @@ som blockerande gate och bygger produktionsbundlen. Container-images
 byggs först efter att CI på `main` har lyckats.
 
 ## Arkitektur
+
+Se [systemöversikten](docs/ARCHITECTURE.md) för komponenter, dataflöden,
+källprioritet och säkerhetsinvarianter.
 
 ```text
 agent/
@@ -580,6 +592,7 @@ Inte klart:
 
 ## Status
 
-Aktiv upprustning. Systemet ska betraktas som utvecklingsmiljö och
+Aktuell, verifierad status och kända blockers finns i
+[docs/CURRENT_STATE.md](docs/CURRENT_STATE.md). Systemet ska betraktas som
 papertrading, inte som investeringsrådgivning eller produktionsklar
 automatisk handel.

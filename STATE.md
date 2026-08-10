@@ -1,5 +1,9 @@
 # State
 
+> Historisk journal. Aktuell verifierad kod-, CI- och driftstatus finns i
+> [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md). Nytt nuläge ska uppdateras
+> där; denna fil bevarar kronologin.
+
 ## 2026-08-05 — grafminne i kontrollerat skuggläge
 
 - Staging kör schema 41 med både `knowledge-worker` och den separata
