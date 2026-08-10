@@ -349,6 +349,8 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert ":latest" not in build
     assert "steps.agent.outputs.digest" in build
     assert "steps.dashboard.outputs.digest" in build
+    assert build.count("org.opencontainers.image.source=") == 2
+    assert build.count("org.opencontainers.image.revision=") == 2
     assert "actions/attest@v4" in build
     assert "actions/upload-artifact@v4" in build
     assert "--schema-min 44" in build
@@ -361,6 +363,12 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert "ssh-keyscan" not in deploy
     assert "DEPLOY_KNOWN_HOSTS" in deploy
     assert 'cp ops/release/runtime_profiles.py "$bundle/ops/release/"' in deploy
+    assert "org.opencontainers.image.revision" in (
+        ROOT / "ops/release/deploy.sh"
+    ).read_text()
+    assert "org.opencontainers.image.source" in (
+        ROOT / "ops/release/deploy.sh"
+    ).read_text()
     assert "image: ${AGENT_IMAGE:?" in compose
     assert "image: ${DASHBOARD_IMAGE:?" in compose
     assert "build:" not in compose
@@ -469,10 +477,25 @@ def _fake_docker(tmp_path):
     fake_bin.mkdir()
     docker = fake_bin / "docker"
     docker.write_text(
-        """#!/bin/sh
+        r"""#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
+  *" pull db agent dashboard monitor"*)
+    printf '%s\n' "$*" | sed -n \
+      's#.*releases/\([0-9a-f]\{40\}\)/.*#\1#p' \
+      > "$FAKE_ACTIVE_RELEASE_FILE"
+    ;;
   *" exec -T db psql "*) printf '44\n' ;;
+  *"image inspect "*"org.opencontainers.image.revision"*)
+    if [ -n "$FAKE_IMAGE_REVISION" ]; then
+      printf '%s\n' "$FAKE_IMAGE_REVISION"
+    else
+      cat "$FAKE_ACTIVE_RELEASE_FILE"
+    fi
+    ;;
+  *"image inspect "*"org.opencontainers.image.source"*)
+    printf '%s\n' "$FAKE_IMAGE_SOURCE"
+    ;;
   *" exec -T agent python -m src.healthcheck readiness"*)
     if [ -n "$FAIL_SHA" ]; then
       case "$*" in
@@ -491,7 +514,13 @@ exit 0
     return fake_bin
 
 
-def _run_deploy(tmp_path, requested_sha, *, fail_sha=""):
+def _run_deploy(
+    tmp_path,
+    requested_sha,
+    *,
+    fail_sha="",
+    image_revision=None,
+):
     log = tmp_path / "docker.log"
     fake_bin = _fake_docker(tmp_path)
     environ = os.environ.copy()
@@ -500,6 +529,11 @@ def _run_deploy(tmp_path, requested_sha, *, fail_sha=""):
             "PATH": f"{fake_bin}:{environ['PATH']}",
             "FAKE_DOCKER_LOG": str(log),
             "FAIL_SHA": fail_sha,
+            "FAKE_IMAGE_REVISION": image_revision or "",
+            "FAKE_ACTIVE_RELEASE_FILE": str(tmp_path / "active-release"),
+            "FAKE_IMAGE_SOURCE": (
+                "https://github.com/diffen77/trading-agent"
+            ),
         }
     )
     result = subprocess.run(
@@ -563,6 +597,28 @@ def test_deploy_promotes_only_after_smoke_passes(tmp_path):
         "--profile market-data --profile nasdaq-reference "
         "stop universe-sync"
     ) in log
+
+
+def test_deploy_rejects_image_from_another_revision_before_migration(
+    tmp_path,
+):
+    release_sha = "2" * 40
+    _create_release(tmp_path, release_sha)
+    _write_runtime_env(
+        tmp_path / "runtime.env",
+        _runtime_secret_env_content(tmp_path),
+    )
+
+    result, log = _run_deploy(
+        tmp_path,
+        release_sha,
+        image_revision="9" * 40,
+    )
+
+    assert result.returncode == 1
+    assert "image provenance does not match" in result.stderr
+    assert " run --rm migrate" not in log
+    assert not (tmp_path / "current-release").exists()
 
 
 def test_deploy_activates_only_explicit_runtime_profiles(tmp_path):

@@ -161,6 +161,24 @@ schema_is_compatible() {
         test "$schema_version" -le "$schema_max"
 }
 
+verify_image_provenance() {
+    release=$1
+    expected_source="https://github.com/${image_prefix#ghcr.io/}"
+    for key in AGENT_IMAGE DASHBOARD_IMAGE; do
+        image=$(manifest_value "$release" "$key") || return 1
+        revision=$(docker image inspect --format \
+            '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            "$image") || return 1
+        source=$(docker image inspect --format \
+            '{{ index .Config.Labels "org.opencontainers.image.source" }}' \
+            "$image") || return 1
+        if [ "$revision" != "$release" ] || [ "$source" != "$expected_source" ]; then
+            echo "image provenance does not match release $release" >&2
+            return 1
+        fi
+    done
+}
+
 smoke_release() {
     release=$1
     attempts=0
@@ -230,6 +248,7 @@ activate_release() {
     validate_release "$release" || return 1
     compose_release "$release" \
         pull db agent dashboard monitor || return 1
+    verify_image_provenance "$release" || return 1
     if profile_enabled market-data; then
         compose_release "$release" --profile market-data \
             pull universe-sync market-sync || return 1
