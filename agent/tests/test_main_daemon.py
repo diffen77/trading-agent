@@ -258,6 +258,86 @@ def test_failed_scheduled_routine_is_retried_within_grace_period(
     assert database.routine_events[1]["failure_code"] is None
 
 
+def test_delayed_provider_can_complete_open_at_first_executable_book(
+    monkeypatch,
+):
+    observed_at = datetime(
+        2026,
+        8,
+        10,
+        7,
+        20,
+        45,
+        tzinfo=timezone.utc,
+    )
+
+    class OpenDelayDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is timezone.utc
+            return observed_at
+
+    class Database:
+        def __init__(self):
+            self.routine_events = []
+
+        def get_successful_scheduled_routine_keys(self, session_date):
+            if session_date == observed_at.date():
+                return ("2026-08-10:morning",)
+            return ()
+
+        def get_authorized_market_data_mode(self, checked_at):
+            assert checked_at == observed_at
+            return {
+                "data_type": "delayed-pre-trade-equity",
+                "nominal_delay_seconds": 900,
+                "max_transport_lag_seconds": 300,
+            }
+
+        def record_scheduled_routine_event(self, **event):
+            self.routine_events.append(event)
+
+        def get_market_session(self, mic, session_date):
+            assert mic == "XSTO"
+            assert session_date == observed_at.date()
+            return SimpleNamespace(is_open=lambda _now: True)
+
+        def require_operational_market_data(self, now):
+            assert now == observed_at
+
+        def save_portfolio_snapshot(self):
+            pass
+
+    class Analyzer:
+        def find_opportunities(self, *, now):
+            assert now == observed_at
+            return []
+
+        def update_prospects(self, *, now):
+            assert now == observed_at
+
+        def run_technical_analysis(self):
+            return []
+
+    class Trader:
+        def check_positions(self, *, now):
+            assert now == observed_at
+
+    monkeypatch.setattr("src.main.datetime", OpenDelayDateTime)
+    monkeypatch.setattr(
+        "src.main.time.sleep",
+        lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+
+    database = Database()
+    run_daemon(database, Analyzer(), Trader())
+
+    assert [
+        (event["routine_name"], event["status"])
+        for event in database.routine_events
+    ] == [("open", "SUCCEEDED")]
+
+
 def test_restart_does_not_repeat_a_completed_brain_slot(monkeypatch):
     current_key = f"scheduled-brain:{brain_cycle_slot(NOW)}"
     database = OpenMarketDatabase(completed_job_keys=(current_key,))

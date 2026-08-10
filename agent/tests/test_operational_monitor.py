@@ -258,6 +258,76 @@ def test_monitor_run_persists_transitions_and_notifies_only_opened(
     assert [event["state"] for event in notifier.events] == ["OPEN"]
 
 
+def test_monitor_does_not_mark_delayed_open_missed_before_delivery_window(
+    monkeypatch,
+):
+    observed_at = datetime(
+        2026,
+        8,
+        10,
+        7,
+        20,
+        45,
+        tzinfo=timezone.utc,
+    )
+    healthy = HealthReport(
+        mode="readiness",
+        status="READY",
+        observed_at=observed_at.isoformat(),
+        checks=(HealthCheck("database_schema", True, "ready"),),
+    )
+
+    class Session:
+        opens_at = datetime(2026, 8, 10, 7, 0, tzinfo=timezone.utc)
+        closes_at = datetime(2026, 8, 10, 15, 30, tzinfo=timezone.utc)
+
+        def is_open(self, now):
+            return self.opens_at <= now <= self.closes_at
+
+    class Database:
+        def __init__(self):
+            self.synced = None
+
+        def get_successful_scheduled_routine_keys(self, _date):
+            return ("2026-08-10:morning",)
+
+        def get_authorized_market_data_mode(self, checked_at):
+            assert checked_at == observed_at
+            return {
+                "data_type": "delayed-pre-trade-equity",
+                "nominal_delay_seconds": 900,
+                "max_transport_lag_seconds": 300,
+            }
+
+        def query(self, sql, _params=None):
+            assert "paper_benchmark_incidents" in sql
+            return [{"critical_incident_count": 0}]
+
+        def get_market_session(self, mic, _date):
+            assert mic == "XSTO"
+            return Session()
+
+        def sync_operational_alerts(self, alerts, *, observed_at):
+            self.synced = tuple(alerts)
+            return ()
+
+    monkeypatch.setattr(
+        "src.operational_monitor.collect_health_report",
+        lambda **_values: healthy,
+    )
+    database = Database()
+
+    result = run_monitor_once(
+        database=database,
+        observed_at=observed_at,
+        model_probe=lambda _environ: True,
+        environ={},
+    )
+
+    assert result.status == "HEALTHY"
+    assert database.synced == ()
+
+
 def test_monitor_cli_emits_bounded_json(monkeypatch, capsys):
     alert = evaluate_operational_alerts(
         readiness=_report(

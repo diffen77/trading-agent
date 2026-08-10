@@ -37,6 +37,7 @@ from .core.schedule import (
     BRAIN_CYCLE_INTERVAL_MINUTES,
     brain_cycle_slot,
     due_routines,
+    provider_routine_grace_periods,
     recoverable_routines,
     recovery_slots,
     stockholm_now,
@@ -161,10 +162,23 @@ def run_daemon(db, analyzer, trader, brain=None, student=None):
                 schedule_evidence_ready = False
 
             if schedule_evidence_ready:
-                current_routines = due_routines(
-                    now,
-                    completed=completed_routines,
-                )
+                try:
+                    grace_periods = provider_routine_grace_periods(
+                        db.get_authorized_market_data_mode(now)
+                    )
+                except Exception:
+                    grace_periods = {}
+                if grace_periods:
+                    current_routines = due_routines(
+                        now,
+                        completed=completed_routines,
+                        grace_periods=grace_periods,
+                    )
+                else:
+                    current_routines = due_routines(
+                        now,
+                        completed=completed_routines,
+                    )
                 current_keys = {routine.key for routine in current_routines}
                 recovered_routines = tuple(
                     routine

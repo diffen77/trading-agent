@@ -5311,7 +5311,9 @@ class Database:
                     contract.provider,
                     contract.data_type,
                     contract.usage_scope,
-                    contract.authorization_basis
+                    contract.authorization_basis,
+                    contract.nominal_delay_seconds,
+                    contract.max_transport_lag_seconds
                 FROM market_data_provider_contracts contract
                 JOIN LATERAL (
                     SELECT candidate.*

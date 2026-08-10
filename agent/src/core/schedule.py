@@ -1,5 +1,6 @@
 """Timezone-safe daemon scheduling for the Stockholm market."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import AbstractSet
@@ -9,6 +10,7 @@ from zoneinfo import ZoneInfo
 STOCKHOLM = ZoneInfo("Europe/Stockholm")
 BRAIN_CYCLE_INTERVAL_MINUTES = 15
 _GRACE_PERIOD = timedelta(minutes=20)
+_PROVIDER_PROCESSING_ALLOWANCE = timedelta(minutes=1)
 _RECOVERY_WINDOWS = {
     "morning": timedelta(hours=2),
     "close": timedelta(hours=6),
@@ -46,6 +48,44 @@ def brain_cycle_slot(now: datetime) -> int:
     stockholm_now(now)
     interval_seconds = BRAIN_CYCLE_INTERVAL_MINUTES * 60
     return int(now.timestamp() // interval_seconds)
+
+
+def provider_routine_grace_periods(
+    market_data_mode: Mapping[str, object],
+) -> dict[str, timedelta]:
+    """Derive bounded routine grace from the authorized provider contract."""
+    if not isinstance(market_data_mode, Mapping):
+        raise ValueError("market_data_mode must be a mapping")
+    if market_data_mode.get("data_type") != "delayed-pre-trade-equity":
+        return {}
+
+    timing = []
+    for key in ("nominal_delay_seconds", "max_transport_lag_seconds"):
+        value = market_data_mode.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{key} must be a non-negative int")
+        if not 0 <= value <= 24 * 60 * 60:
+            raise ValueError(f"{key} must be a non-negative int")
+        timing.append(value)
+
+    provider_window = (
+        timedelta(seconds=sum(timing)) + _PROVIDER_PROCESSING_ALLOWANCE
+    )
+    return {"open": max(_GRACE_PERIOD, provider_window)}
+
+
+def _routine_grace_period(
+    name: str,
+    grace_periods: Mapping[str, timedelta] | None,
+) -> timedelta:
+    if grace_periods is None or name not in grace_periods:
+        return _GRACE_PERIOD
+    value = grace_periods[name]
+    if not isinstance(value, timedelta) or not _GRACE_PERIOD <= value <= timedelta(
+        days=1
+    ):
+        raise ValueError("routine grace period must be between 20 minutes and 1 day")
+    return value
 
 
 def recovery_slots(
@@ -90,6 +130,7 @@ def due_routines(
     now: datetime,
     *,
     completed: AbstractSet[str],
+    grace_periods: Mapping[str, timedelta] | None = None,
 ) -> list[DueRoutine]:
     """Return routines due within a bounded local-time grace window."""
     local_now = stockholm_now(now)
@@ -102,7 +143,10 @@ def due_routines(
         )
         delay = local_now - scheduled_at
         routine = DueRoutine(name=name, scheduled_at=scheduled_at)
-        if timedelta(0) <= delay <= _GRACE_PERIOD:
+        if timedelta(0) <= delay <= _routine_grace_period(
+            name,
+            grace_periods,
+        ):
             if routine.key not in completed:
                 result.append(routine)
     return result
@@ -112,6 +156,7 @@ def missed_routines(
     now: datetime,
     *,
     completed: AbstractSet[str],
+    grace_periods: Mapping[str, timedelta] | None = None,
 ) -> list[DueRoutine]:
     """Return today's routines whose completion grace period expired."""
     local_now = stockholm_now(now)
@@ -124,7 +169,8 @@ def missed_routines(
         )
         routine = DueRoutine(name=name, scheduled_at=scheduled_at)
         if (
-            local_now - scheduled_at > _GRACE_PERIOD
+            local_now - scheduled_at
+            > _routine_grace_period(name, grace_periods)
             and routine.key not in completed
         ):
             result.append(routine)

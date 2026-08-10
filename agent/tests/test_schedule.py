@@ -7,6 +7,7 @@ from src.core.schedule import (
     brain_cycle_slot,
     due_routines,
     missed_routines,
+    provider_routine_grace_periods,
     recoverable_routines,
     recovery_slots,
     stockholm_now,
@@ -89,6 +90,66 @@ def test_routine_is_not_missed_during_its_grace_period():
     assert "midday" not in {
         routine.name
         for routine in missed_routines(now, completed=set())
+    }
+
+
+def test_delayed_provider_extends_open_grace_through_delivery_window():
+    grace_periods = provider_routine_grace_periods({
+        "data_type": "delayed-pre-trade-equity",
+        "nominal_delay_seconds": 900,
+        "max_transport_lag_seconds": 300,
+    })
+    first_executable_book = datetime(
+        2026,
+        8,
+        10,
+        7,
+        20,
+        45,
+        tzinfo=timezone.utc,
+    )
+
+    assert "open" in {
+        routine.name
+        for routine in due_routines(
+            first_executable_book,
+            completed=set(),
+            grace_periods=grace_periods,
+        )
+    }
+    assert "open" not in {
+        routine.name
+        for routine in missed_routines(
+            first_executable_book,
+            completed=set(),
+            grace_periods=grace_periods,
+        )
+    }
+
+
+def test_delayed_provider_open_grace_remains_bounded():
+    grace_periods = provider_routine_grace_periods({
+        "data_type": "delayed-pre-trade-equity",
+        "nominal_delay_seconds": 900,
+        "max_transport_lag_seconds": 300,
+    })
+    after_delivery_window = datetime(
+        2026,
+        8,
+        10,
+        7,
+        21,
+        1,
+        tzinfo=timezone.utc,
+    )
+
+    assert "open" in {
+        routine.name
+        for routine in missed_routines(
+            after_delivery_window,
+            completed=set(),
+            grace_periods=grace_periods,
+        )
     }
 
 

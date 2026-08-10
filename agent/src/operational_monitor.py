@@ -9,7 +9,11 @@ import time
 from typing import Iterable
 
 from .core.notifier import TelegramNotifier
-from .core.schedule import missed_routines, stockholm_now
+from .core.schedule import (
+    missed_routines,
+    provider_routine_grace_periods,
+    stockholm_now,
+)
 from .data.database import Database
 from .healthcheck import (
     HealthMode,
@@ -166,7 +170,20 @@ def run_monitor_once(
     )
     local_date = stockholm_now(observed_at).date()
     completed = database.get_successful_scheduled_routine_keys(local_date)
-    missed = missed_routines(observed_at, completed=set(completed))
+    try:
+        grace_periods = provider_routine_grace_periods(
+            database.get_authorized_market_data_mode(observed_at)
+        )
+    except Exception:
+        grace_periods = {}
+    if grace_periods:
+        missed = missed_routines(
+            observed_at,
+            completed=set(completed),
+            grace_periods=grace_periods,
+        )
+    else:
+        missed = missed_routines(observed_at, completed=set(completed))
     rows = database.query(
         """
         SELECT COUNT(*) AS critical_incident_count

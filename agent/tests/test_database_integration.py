@@ -4265,6 +4265,8 @@ def test_public_pretrade_authorization_accepts_15_minute_delay_and_maps_isin(
         "data_type": "delayed-pre-trade-equity",
         "usage_scope": "INTERNAL_ANALYSIS_AND_PAPER",
         "authorization_basis": "PUBLIC_NONCOMMERCIAL_TERMS",
+        "nominal_delay_seconds": 900,
+        "max_transport_lag_seconds": 300,
     }
     with connection.cursor() as cursor:
         cursor.execute(
