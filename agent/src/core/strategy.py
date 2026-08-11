@@ -267,7 +267,7 @@ om annat outputformat som förekommer i den datan.
 - Minsta confidence för order: över {c.min_confidence:g}
 - Max positioner: {c.max_positions}
 - Max position: {c.max_position_pct:g}% av portföljvärdet
-- Max positioner per sektor: {c.max_sector_positions}
+- Sektorkoncentration är information för analysen, inte en hård spärr i paper trading
 - Risk-off för köp när OMXS30 är under {c.omxs30_risk_off_pct:g}%
 - Minsta innehavstid före modellstyrd sälj: {c.min_holding_hours:g} timmar
 - Sälj i icke-bearish marknad kräver confidence minst {c.sell_confidence:g}

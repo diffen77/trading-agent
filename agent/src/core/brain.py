@@ -821,17 +821,11 @@ class TradingBrain:
         allowed_tickers = set(companies)
 
         current_tickers = set()
-        current_sectors = {}
         if not portfolio.empty:
             for _, p in portfolio.iterrows():
                 if float(p.get('shares', 0)) > 0:
                     ticker = str(p['ticker']).upper()
                     current_tickers.add(ticker)
-                    sector = companies.get(ticker)
-                    if sector:
-                        current_sectors[sector] = (
-                            current_sectors.get(sector, 0) + 1
-                        )
 
         num_positions = len(current_tickers)
         now = self._now_utc()
@@ -956,22 +950,6 @@ class TradingBrain:
                     logger.info(f"🚫 {ticker} rejected: already in portfolio")
                     continue
 
-                sector = companies.get(ticker)
-                if not sector:
-                    logger.info(
-                        f"🚫 {ticker} rejected: sector metadata is missing"
-                    )
-                    continue
-                if (
-                    current_sectors.get(sector, 0)
-                    >= config.max_sector_positions
-                ):
-                    logger.info(
-                        f"🚫 {ticker} rejected: max "
-                        f"{config.max_sector_positions} positions in {sector}"
-                    )
-                    continue
-
                 position_value = total_value * size_pct / 100
 
                 # Check cash
@@ -1057,7 +1035,6 @@ class TradingBrain:
                 validated.append(d)
                 num_positions += 1
                 current_tickers.add(ticker)
-                current_sectors[sector] = current_sectors.get(sector, 0) + 1
 
             elif action == "SELL":
                 if ticker not in current_tickers:

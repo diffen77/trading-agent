@@ -606,7 +606,7 @@ def test_sell_holding_period_uses_latest_open_buy_and_injected_clock():
     assert make_brain(db).validate_decisions(response(sell())) == []
 
 
-def test_third_position_in_same_sector_is_rejected():
+def test_third_position_in_same_sector_is_allowed_in_paper_trading():
     db = FakeDatabase(
         portfolio=[
             {"ticker": "VOLV-B", "shares": 1},
@@ -616,7 +616,7 @@ def test_third_position_in_same_sector_is_rejected():
 
     validated = make_brain(db).validate_decisions(response(buy("SAND")))
 
-    assert validated == []
+    assert [decision["ticker"] for decision in validated] == ["SAND"]
 
 
 def test_valid_decision_is_normalized_and_gets_position_value():
