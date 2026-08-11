@@ -5793,6 +5793,153 @@ def test_continuous_candidate_journal_labels_forward_outcomes(
     assert db.get_active_candidate_policy().min_signal_score == 60
 
 
+def test_forward_challenger_can_be_automatically_activated(
+    clean_database,
+    connection,
+    monkeypatch,
+):
+    db = clean_database
+    transition_at = datetime.now(timezone.utc).replace(microsecond=0)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO candidate_policy_calibration_runs (
+                calibration_key,
+                policy_version,
+                evaluated_at,
+                session_cutoff_date,
+                status,
+                reason_code,
+                train_sessions,
+                validation_sessions,
+                train_outcomes,
+                validation_outcomes,
+                coverage_pct,
+                active_min_signal_score,
+                challenger_min_signal_score,
+                baseline_validation_mean_bps,
+                challenger_validation_mean_bps,
+                validation_improvement_bps,
+                metrics
+            )
+            VALUES (
+                'candidate:xsto-momentum-v1:auto-forward-test',
+                'xsto-momentum-v1',
+                %s,
+                %s,
+                'CHALLENGER',
+                'FORWARD_GATE_PASSED',
+                10,
+                3,
+                1000,
+                300,
+                100,
+                0,
+                60,
+                1,
+                6,
+                5,
+                '{}'::JSONB
+            )
+            RETURNING id
+            """,
+            (transition_at, transition_at.date()),
+        )
+        calibration_id = int(cursor.fetchone()[0])
+        cursor.execute(
+            """
+            INSERT INTO candidate_policy_versions (
+                version,
+                status,
+                config,
+                config_hash,
+                parent_version_id,
+                calibration_run_id,
+                proposed_by
+            )
+            SELECT
+                'xsto-challenger-auto-test',
+                'DRAFT',
+                '{"max_spread_bps":250,"min_signal_score":60}'::JSONB,
+                %s,
+                id,
+                %s,
+                'continuous-learning-worker'
+            FROM candidate_policy_versions
+            WHERE status = 'ACTIVE'
+            """,
+            (
+                "f7d4611347849d783cc71b04c71d07381"
+                "f3f838ed16d1e4516c551bc966eb38b",
+                calibration_id,
+            ),
+        )
+
+    assert db.activate_candidate_policy_automatically(
+        "xsto-challenger-auto-test",
+        activated_at=transition_at,
+    )
+    assert not db.activate_candidate_policy_automatically(
+        "xsto-challenger-auto-test",
+        activated_at=transition_at,
+    )
+    assert db.get_active_candidate_policy().version == (
+        "xsto-challenger-auto-test"
+    )
+    rows = db.query(
+        """
+        SELECT version, status, reviewed_by, activated_by
+        FROM candidate_policy_versions
+        ORDER BY id
+        """
+    )
+    assert rows[0]["status"] == "RETIRED"
+    assert rows[1]["status"] == "ACTIVE"
+    assert rows[1]["reviewed_by"] == "continuous-learning-worker"
+    assert rows[1]["activated_by"] == "continuous-learning-worker"
+
+    from src.core import continuous_learning
+
+    monkeypatch.setattr(
+        continuous_learning,
+        "evaluate_candidate_policy_rollback",
+        lambda **_metrics: continuous_learning.CandidateRollbackResult(
+            status="ROLLBACK",
+            reason_code="PARENT_FORWARD_PERFORMANCE_RECOVERED",
+            completed_sessions=3,
+            coverage_pct=100,
+            active_outcomes=100,
+            parent_outcomes=100,
+            active_mean_bps=-1,
+            parent_mean_bps=6,
+            parent_positive_rate_pct=55,
+            parent_advantage_bps=7,
+        ),
+    )
+    rollback = db.rollback_candidate_policy_automatically(
+        evaluated_at=transition_at + timedelta(days=3),
+    )
+    assert rollback["status"] == "ROLLBACK"
+    assert rollback["policy_version"].startswith("xsto-rollback-")
+    restored = db.get_active_candidate_policy()
+    assert restored.version == rollback["policy_version"]
+    assert restored.min_signal_score == 0
+    rows = db.query(
+        """
+        SELECT version, status, proposed_by, activated_by
+        FROM candidate_policy_versions
+        ORDER BY id
+        """
+    )
+    assert [row["status"] for row in rows] == [
+        "RETIRED",
+        "RETIRED",
+        "ACTIVE",
+    ]
+    assert rows[2]["proposed_by"] == "continuous-learning-worker"
+    assert rows[2]["activated_by"] == "continuous-learning-worker"
+
+
 def test_knowledge_shadow_journal_is_idempotent_and_append_only(
     clean_database,
     connection,

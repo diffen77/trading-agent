@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from src.core.continuous_learning import (
     calibrate_candidate_policy,
+    evaluate_candidate_policy_rollback,
 )
 
 
@@ -68,3 +69,48 @@ def test_calibration_rejects_incomplete_outcome_coverage():
     assert result.status == "COLLECTING"
     assert result.reason_code == "OUTCOME_COVERAGE_INCOMPLETE"
 
+
+def test_rollback_waits_for_three_complete_sessions():
+    result = evaluate_candidate_policy_rollback(
+        completed_sessions=2,
+        coverage_pct=100,
+        active_outcomes=200,
+        parent_outcomes=300,
+        active_mean_bps=-5,
+        parent_mean_bps=5,
+        parent_positive_rate_pct=60,
+    )
+
+    assert result.status == "COLLECTING"
+    assert result.reason_code == "INSUFFICIENT_ROLLBACK_SESSIONS"
+
+
+def test_rollback_restores_parent_after_bounded_forward_regression():
+    result = evaluate_candidate_policy_rollback(
+        completed_sessions=3,
+        coverage_pct=100,
+        active_outcomes=120,
+        parent_outcomes=240,
+        active_mean_bps=-4,
+        parent_mean_bps=3,
+        parent_positive_rate_pct=55,
+    )
+
+    assert result.status == "ROLLBACK"
+    assert result.reason_code == "PARENT_FORWARD_PERFORMANCE_RECOVERED"
+    assert result.parent_advantage_bps == 7
+
+
+def test_rollback_keeps_active_policy_without_clear_regression():
+    result = evaluate_candidate_policy_rollback(
+        completed_sessions=3,
+        coverage_pct=100,
+        active_outcomes=120,
+        parent_outcomes=240,
+        active_mean_bps=4,
+        parent_mean_bps=3,
+        parent_positive_rate_pct=55,
+    )
+
+    assert result.status == "KEEP"
+    assert result.reason_code == "ACTIVE_POLICY_REMAINS_COMPETITIVE"

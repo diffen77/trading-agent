@@ -11,7 +11,7 @@ medvetet väntar. Detaljerade framtidskrav ligger kvar i `ROADMAP.md`.
 | P0 | Schema 45-transition | Beslut krävs | Snapshot, underhållsfönster och explicit backout för första release |
 | P1 | Benchmark-preflight | Implementerad lokalt | Kör mot staging efter schema-45-release och lös rapporterade blockerare |
 | P1 | Historisk data | Leveransgate klar, data saknas | Välj licens/produkt, lägg sampleverans och bygg formatadapter |
-| P1 | Kontinuerligt lärande | Automatisk evidens, manuell aktivering | Fortsätt samla sessioner; granska eventuell `DRAFT`-utmanare |
+| P1 | Kontinuerligt lärande | Automatisk evidens, aktivering och återställning i paper trading | Fortsätt samla sessioner och följ policyövergångarnas evidens |
 | P1 | Dokumentation och projektminne | Synkat efter merge | Uppdatera efter nästa bestående driftbeslut |
 | P1 | Forward benchmark | Blockerad av data och beslut | Ren ledger, frysta antaganden och godkänd förregistrering |
 | P1 | Tradinggraf | Shadow-only | Oberoende evidens före eventuell operativ aktivering |
