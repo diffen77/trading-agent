@@ -13,7 +13,7 @@ historiska journalen och ska inte användas som ensam källa för dagens drift.
   [PR #20](https://github.com/diffen77/trading-agent/pull/20) och
   [PR #21](https://github.com/diffen77/trading-agent/pull/21).
 - Deployad staging-release är
-  `8805c15250fd70be08080b6a140adc359d655ad6`.
+  `7bbf9f6971c14e0e317df1ea170a21345d58f805`.
 - PostgreSQL är system of record. Neo4j och Cortex är härledda projekt- och
   tradingminnen, inte ersättning för Git eller ledgern.
 
@@ -33,8 +33,8 @@ Följande dag-ett-förbättringar ingår nu i `main`:
 På ett nybyggt PostgreSQL 16-schema 48 passerade 692 agenttester, 67
 dashboardtester och 27 fokuserade releasetester. Dashboardens
 produktionsbygge och en lokal kontroll av den slutliga agentimagen passerade.
-GitHub Actions-körning `31536691004` passerade på aktuellt main-head. Den
-immutabla releasekörningen `31536865354` byggde och pushade revisionsmärkta
+GitHub Actions-körning `31538423956` passerade på aktuellt main-head. Den
+immutabla releasekörningen `31538592727` byggde och pushade revisionsmärkta
 agent- och dashboard-images, attesterade deras proveniens och publicerade
 plattformens digestbevis.
 
@@ -52,13 +52,13 @@ Senaste läsverifieringen visade:
 - intern readiness: `READY`;
 - databasschema: 48;
 - agent-image:
-  `sha256:68fd95f589b488cee617ec38da066a2e698ee3b3ff9e1d990da239c4aefc2598`;
+  `sha256:34bf65bf6c50eada1c5f1864a2db25123dd146d00f5c9c8612ea00702c95d00f`;
 - dashboard-image:
-  `sha256:448086f46cebe4f0237eca4fcc0394a94034119b3f1e448ad107ed5981a908b8`;
+  `sha256:8833ebb6c3f8edfcc05d83c58fef6d10ec9cac2122fbf43ba27bb36f888922d5`;
 - båda images har OCI-revision
-  `8805c15250fd70be08080b6a140adc359d655ad6`.
+  `7bbf9f6971c14e0e317df1ea170a21345d58f805`.
 
-Plattformsdeploy `31537091406` validerade nyttolasten, sparade föregående
+Plattformsdeploy `31538805321` validerade nyttolasten, sparade föregående
 imagefamiljer för rollback, hämtade digestlåsta images, migrerade, startade om
 och verifierade extern health. Efterkontrollen visade inga öppna driftlarm.
 Trading-readiness var korrekt `NOT_READY` enbart därför att XSTO-sessionen var
