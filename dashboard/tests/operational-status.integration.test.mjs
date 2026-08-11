@@ -18,7 +18,7 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
 
 
 test(
-  'operational status query fails closed against schema 45',
+  'operational status query fails closed against schema 48',
   { skip: !TEST_DATABASE_URL },
   async () => {
     const pool = new pg.Pool({
@@ -28,7 +28,7 @@ test(
     try {
       const status = await loadOperationalStatus(pool)
 
-      assert.equal(status.schema_version, 45)
+      assert.equal(status.schema_version, 48)
       assert.equal(status.overall_status, 'BLOCKED')
       assert.ok(status.blockers.includes('REFERENCE_SNAPSHOT_MISSING'))
       assert.ok(status.blockers.includes('QUOTE_PROVIDER_NOT_READY'))
@@ -47,7 +47,7 @@ test(
 
 
 test(
-  'authorized dashboard quote view executes against schema 45',
+  'authorized dashboard quote view executes against schema 48',
   { skip: !TEST_DATABASE_URL },
   async () => {
     const pool = new pg.Pool({

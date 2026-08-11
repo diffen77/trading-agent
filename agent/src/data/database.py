@@ -54,6 +54,7 @@ from .nasdaq_reference import (
     NasdaqAliasSyncResult,
     NasdaqInstrumentAlias,
 )
+from .nasdaq_sector import SectorClassification
 from .top_of_book import (
     TopOfBookSnapshot,
     TopOfBookState,
@@ -316,10 +317,10 @@ class Database:
             version = session.execute(
                 text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
             ).scalar_one()
-            if version < 45:
+            if version < 48:
                 raise RuntimeError(
                     f"Database schema is too old (version {version}); "
-                    "version 45 is required"
+                    "version 48 is required"
                 )
 
     def upsert_instruments(
@@ -1410,6 +1411,82 @@ class Database:
                     "XSTO company mapping is incomplete after ISIN fallback"
                 )
             return int(mapped_count)
+
+    def get_active_xsto_company_isins(self) -> tuple[str, ...]:
+        """Return stable identifiers for active mapped XSTO companies."""
+        with self.Session() as session:
+            rows = session.execute(text("""
+                SELECT instrument.isin
+                FROM companies company
+                JOIN instruments instrument
+                  ON instrument.id = company.instrument_id
+                WHERE instrument.mic = 'XSTO'
+                  AND instrument.status = 'ACTIVE'
+                ORDER BY instrument.isin
+            """)).mappings().all()
+        return tuple(row["isin"].strip().upper() for row in rows)
+
+    def update_company_sectors(
+        self,
+        classifications: Mapping[str, SectorClassification],
+        *,
+        source: str,
+        verified_at: datetime,
+    ) -> int:
+        """Apply exact-ISIN sectors without replacing curated classifications."""
+        if (
+            not isinstance(source, str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,99}", source)
+        ):
+            raise MarketDataError("sector source is invalid")
+        if (
+            not isinstance(verified_at, datetime)
+            or verified_at.tzinfo is None
+            or verified_at.utcoffset() is None
+        ):
+            raise MarketDataError("sector verified_at must be timezone-aware")
+        if not isinstance(classifications, Mapping) or not classifications:
+            raise MarketDataError("sector classifications are empty")
+        if len(classifications) > 2000:
+            raise MarketDataError("sector classifications are too large")
+
+        updated = 0
+        with self.Session.begin() as session:
+            for isin, classification in classifications.items():
+                if (
+                    not isinstance(classification, SectorClassification)
+                    or isin != classification.isin
+                    or not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", isin)
+                ):
+                    raise MarketDataError(
+                        "sector classification identity is invalid"
+                    )
+                result = session.execute(text("""
+                    UPDATE companies company
+                    SET
+                        sector = :sector,
+                        sector_source = :source,
+                        sector_verified_at = :verified_at,
+                        updated_at = NOW()
+                    FROM instruments instrument
+                    WHERE instrument.id = company.instrument_id
+                      AND instrument.isin = :isin
+                      AND instrument.mic = 'XSTO'
+                      AND instrument.status = 'ACTIVE'
+                      AND (
+                          company.sector IS NULL
+                          OR BTRIM(company.sector) = ''
+                          OR company.sector = 'Unclassified'
+                          OR company.sector_source = :source
+                      )
+                """), {
+                    "isin": isin,
+                    "sector": classification.sector,
+                    "source": source,
+                    "verified_at": verified_at,
+                })
+                updated += max(0, int(result.rowcount or 0))
+        return updated
 
     def ensure_public_pretrade_contract(
         self,
@@ -6680,7 +6757,7 @@ class Database:
                     SELECT
                         prediction.id AS prediction_id,
                         DATE_TRUNC('minute', prediction.observed_at)
-                            AS entry_event_time,
+                            AS requested_entry_event_time,
                         prediction_state.instrument_id,
                         prediction_batch.provider_contract_id
                     FROM candidate_predictions prediction
@@ -6698,26 +6775,42 @@ class Database:
                 evidence AS (
                     SELECT
                         due.*,
-                        state.id AS entry_state_id,
-                        (state.bid_price + state.ask_price) / 2
-                            AS entry_price
+                        candidate.entry_event_time,
+                        candidate.entry_state_id,
+                        candidate.entry_price
                     FROM due
-                    JOIN pre_trade_batches batch
-                      ON batch.provider_contract_id =
-                            due.provider_contract_id
-                     AND batch.report_minute = due.entry_event_time
-                    JOIN pre_trade_stream_cursors seal
-                      ON seal.batch_id = batch.id
-                    JOIN pre_trade_book_states state
-                      ON state.batch_id = batch.id
-                     AND state.instrument_id = due.instrument_id
-                    WHERE state.bid_price IS NOT NULL
-                      AND state.ask_price IS NOT NULL
-                      AND state.bid_quantity > 0
-                      AND state.ask_quantity > 0
-                      AND state.trading_system = 'CLOB'
-                      AND state.trading_phase = 'COTR'
-                      AND state.received_at <= :evaluated_at
+                    JOIN LATERAL (
+                        SELECT
+                            batch.report_minute AS entry_event_time,
+                            state.id AS entry_state_id,
+                            (state.bid_price + state.ask_price) / 2
+                                AS entry_price
+                        FROM pre_trade_batches batch
+                        JOIN pre_trade_stream_cursors seal
+                          ON seal.batch_id = batch.id
+                        JOIN pre_trade_book_states state
+                          ON state.batch_id = batch.id
+                         AND state.instrument_id = due.instrument_id
+                        WHERE batch.provider_contract_id =
+                                due.provider_contract_id
+                          AND batch.report_minute >=
+                                due.requested_entry_event_time
+                          AND batch.report_minute <=
+                                due.requested_entry_event_time
+                                + INTERVAL '2 minutes'
+                          AND state.bid_price IS NOT NULL
+                          AND state.ask_price IS NOT NULL
+                          AND state.bid_quantity > 0
+                          AND state.ask_quantity > 0
+                          AND state.trading_system = 'CLOB'
+                          AND state.trading_phase = 'COTR'
+                          AND state.received_at <= :evaluated_at
+                        ORDER BY
+                            batch.report_minute,
+                            batch.id,
+                            state.id
+                        LIMIT 1
+                    ) candidate ON TRUE
                 )
                 INSERT INTO candidate_prediction_entries (
                     prediction_id,
@@ -6773,26 +6866,42 @@ class Database:
                 evidence AS (
                     SELECT
                         due.*,
-                        state.id AS outcome_state_id,
-                        (state.bid_price + state.ask_price) / 2
-                            AS observed_price
+                        candidate.actual_target_event_time,
+                        candidate.outcome_state_id,
+                        candidate.observed_price
                     FROM due
-                    JOIN pre_trade_batches batch
-                      ON batch.provider_contract_id =
-                            due.provider_contract_id
-                     AND batch.report_minute = due.target_event_time
-                    JOIN pre_trade_stream_cursors seal
-                      ON seal.batch_id = batch.id
-                    JOIN pre_trade_book_states state
-                      ON state.batch_id = batch.id
-                     AND state.instrument_id = due.instrument_id
-                    WHERE state.bid_price IS NOT NULL
-                      AND state.ask_price IS NOT NULL
-                      AND state.bid_quantity > 0
-                      AND state.ask_quantity > 0
-                      AND state.trading_system = 'CLOB'
-                      AND state.trading_phase = 'COTR'
-                      AND state.received_at <= :evaluated_at
+                    JOIN LATERAL (
+                        SELECT
+                            batch.report_minute
+                                AS actual_target_event_time,
+                            state.id AS outcome_state_id,
+                            (state.bid_price + state.ask_price) / 2
+                                AS observed_price
+                        FROM pre_trade_batches batch
+                        JOIN pre_trade_stream_cursors seal
+                          ON seal.batch_id = batch.id
+                        JOIN pre_trade_book_states state
+                          ON state.batch_id = batch.id
+                         AND state.instrument_id = due.instrument_id
+                        WHERE batch.provider_contract_id =
+                                due.provider_contract_id
+                          AND batch.report_minute >= due.target_event_time
+                          AND batch.report_minute <=
+                                due.target_event_time
+                                + INTERVAL '2 minutes'
+                          AND state.bid_price IS NOT NULL
+                          AND state.ask_price IS NOT NULL
+                          AND state.bid_quantity > 0
+                          AND state.ask_quantity > 0
+                          AND state.trading_system = 'CLOB'
+                          AND state.trading_phase = 'COTR'
+                          AND state.received_at <= :evaluated_at
+                        ORDER BY
+                            batch.report_minute,
+                            batch.id,
+                            state.id
+                        LIMIT 1
+                    ) candidate ON TRUE
                 ),
                 inserted AS (
                     INSERT INTO candidate_prediction_outcomes (
@@ -6809,7 +6918,7 @@ class Database:
                         evidence.prediction_id,
                         evidence.entry_id,
                         evidence.horizon,
-                        evidence.target_event_time,
+                        evidence.actual_target_event_time,
                         :evaluated_at,
                         evidence.outcome_state_id,
                         evidence.observed_price,
@@ -9227,9 +9336,11 @@ class Database:
                         "source_book_state_id is required by the running "
                         "benchmark execution contract"
                     )
-            if (
-                benchmark is not None
-                and benchmark['execution_price_source']
+            if benchmark is None and source_book is not None:
+                cost_model = ExecutionCostModel.swedish_retail()
+            if source_book is not None and (
+                benchmark is None
+                or benchmark['execution_price_source']
                 == 'TOP_OF_BOOK_PLUS_SLIPPAGE'
             ):
                 execution = calculate_top_of_book_execution(
@@ -9456,6 +9567,27 @@ class Database:
                     None,
                 )
 
+            insert_trade = dict(normalized)
+            if source_book is not None:
+                raw_side_price = Decimal(
+                    source_book[
+                        'ask_price'
+                        if normalized['action'] == 'BUY'
+                        else 'bid_price'
+                    ]
+                ).quantize(Decimal('0.00000001'))
+                insert_trade.update({
+                    'quote_price': None,
+                    'price': raw_side_price,
+                    'total_value': (
+                        raw_side_price * normalized['shares']
+                    ).quantize(Decimal('0.01')),
+                    'fee_amount': None,
+                    'spread_cost': None,
+                    'slippage_cost': None,
+                    'net_cash_effect': None,
+                })
+
             result = session.execute(text("""
                 INSERT INTO trades (
                     ticker, action, shares, quote_price, price, total_value,
@@ -9483,7 +9615,7 @@ class Database:
                 )
                 RETURNING id, executed_at
             """), {
-                **normalized,
+                **insert_trade,
                 'entry_trade_id': entry_trade_id,
                 'pnl': realized_pnl,
                 'closes_position': closes_position,

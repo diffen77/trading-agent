@@ -89,8 +89,8 @@ jobs:
           --release-sha "$RELEASE_SHA"
           --agent-image "$IMAGE_PREFIX/agent@$AGENT_DIGEST"
           --dashboard-image "$IMAGE_PREFIX/dashboard@$DASHBOARD_DIGEST"
-          --schema-min 45
-          --schema-max 45
+          --schema-min 48
+          --schema-max 48
           --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Upload immutable release manifest

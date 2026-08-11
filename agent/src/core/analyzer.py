@@ -308,11 +308,18 @@ class MarketAnalyzer:
             'Basic Materials': 15,
             'Technology': 17,
             'Consumer Cyclical': 12,
+            'Consumer Discretionary': 12,
             'Consumer Defensive': 14,
+            'Consumer Staples': 14,
             'Financial Services': 15,
+            'Financials': 15,
             'Healthcare': 17,
+            'Health Care': 17,
             'Communication Services': 12,
+            'Telecommunications': 12,
             'Real Estate': 10,
+            'Energy': 15,
+            'Utilities': 14,
         }
         sector_score = sector_scores.get(sector, 12)
         

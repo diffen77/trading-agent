@@ -1,7 +1,7 @@
 import { buildActivationActions } from './activation-actions.mjs'
 
 
-export const REQUIRED_SCHEMA_VERSION = 45
+export const REQUIRED_SCHEMA_VERSION = 48
 
 
 const OPERATIONAL_STATUS_QUERY = `

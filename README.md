@@ -218,6 +218,13 @@ stängda affärer och kritiska incidenter räknas från append-only-loggar
 och drawdown använder sessionens högsta/lägsta NAV. Se
 [forward-paper-kontraktet](docs/forward-paper-benchmark.md).
 
+Schema 48 ger även vanlig papertrading en separat, versionsbunden
+kostnadspolicy. Fills från förseglad orderbok använder faktisk spread,
+5 baspunkters konservativ slippage och 0,25 procents courtage med minst
+1 SEK. Policyn gäller endast framåt och ersätter aldrig ett aktivt
+benchmarks frysta modell. Se
+[ADR-004](docs/decisions/ADR-004-default-paper-execution-costs.md).
+
 Schema 16 gör även den löpande portföljvärderingen spårbar. Öppna
 positioner får endast värderas med quotes från den aktuella,
 fullvaliderade leverantören. Varje sparad snapshot binder ticker, antal,

@@ -1,4 +1,4 @@
-"""Deterministic paper-fill costs for a frozen benchmark experiment."""
+"""Deterministic paper-fill costs for paper trading and benchmarks."""
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -15,6 +15,7 @@ class ExecutionCostModel:
     fee_bps: Decimal
     spread_bps: Decimal
     slippage_bps: Decimal
+    minimum_fee: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         for name in ("fee_bps", "spread_bps", "slippage_bps"):
@@ -24,6 +25,10 @@ class ExecutionCostModel:
                     f"{name} must be between 0 and 1000"
                 )
             object.__setattr__(self, name, value)
+        minimum_fee = _finite_decimal(self.minimum_fee, "minimum_fee")
+        if not Decimal("0") <= minimum_fee <= Decimal("10000"):
+            raise ValueError("minimum_fee must be between 0 and 10000")
+        object.__setattr__(self, "minimum_fee", minimum_fee)
 
     @classmethod
     def zero(cls) -> "ExecutionCostModel":
@@ -31,6 +36,16 @@ class ExecutionCostModel:
             fee_bps=Decimal("0"),
             spread_bps=Decimal("0"),
             slippage_bps=Decimal("0"),
+        )
+
+    @classmethod
+    def swedish_retail(cls) -> "ExecutionCostModel":
+        """Default paper model: retail fee, actual book spread, slippage."""
+        return cls(
+            fee_bps=Decimal("25"),
+            spread_bps=Decimal("0"),
+            slippage_bps=Decimal("5"),
+            minimum_fee=Decimal("1"),
         )
 
 
@@ -75,9 +90,15 @@ def calculate_paper_execution(
         _MONEY_QUANTUM,
         rounding=ROUND_HALF_UP,
     )
-    fee_amount = (gross_value * costs.fee_bps / _BPS).quantize(
-        _MONEY_QUANTUM,
-        rounding=ROUND_HALF_UP,
+    fee_amount = max(
+        (gross_value * costs.fee_bps / _BPS).quantize(
+            _MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        ),
+        costs.minimum_fee.quantize(
+            _MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        ),
     )
     spread_cost = (
         quote * quantity * half_spread_bps / _BPS
@@ -151,9 +172,15 @@ def calculate_top_of_book_execution(
         _MONEY_QUANTUM,
         rounding=ROUND_HALF_UP,
     )
-    fee_amount = (gross_value * costs.fee_bps / _BPS).quantize(
-        _MONEY_QUANTUM,
-        rounding=ROUND_HALF_UP,
+    fee_amount = max(
+        (gross_value * costs.fee_bps / _BPS).quantize(
+            _MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        ),
+        costs.minimum_fee.quantize(
+            _MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        ),
     )
     spread_cost = (
         abs(executable_side - midpoint) * quantity

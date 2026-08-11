@@ -8,6 +8,7 @@ from src.core.schedule import (
     due_routines,
     missed_routines,
     provider_routine_grace_periods,
+    provider_routine_start_delays,
     recoverable_routines,
     recovery_slots,
     stockholm_now,
@@ -123,6 +124,38 @@ def test_delayed_provider_extends_open_grace_through_delivery_window():
             first_executable_book,
             completed=set(),
             grace_periods=grace_periods,
+        )
+    }
+
+
+def test_delayed_open_waits_until_first_provider_delivery_is_possible():
+    provider = {
+        "data_type": "delayed-pre-trade-equity",
+        "nominal_delay_seconds": 900,
+        "max_transport_lag_seconds": 300,
+    }
+    start_delays = provider_routine_start_delays(provider)
+    grace_periods = provider_routine_grace_periods(provider)
+
+    too_early = datetime(2026, 8, 10, 7, 5, tzinfo=timezone.utc)
+    first_possible = datetime(2026, 8, 10, 7, 16, tzinfo=timezone.utc)
+
+    assert "open" not in {
+        routine.name
+        for routine in due_routines(
+            too_early,
+            completed=set(),
+            grace_periods=grace_periods,
+            start_delays=start_delays,
+        )
+    }
+    assert "open" in {
+        routine.name
+        for routine in due_routines(
+            first_possible,
+            completed=set(),
+            grace_periods=grace_periods,
+            start_delays=start_delays,
         )
     }
 

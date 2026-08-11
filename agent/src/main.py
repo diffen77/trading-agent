@@ -38,6 +38,7 @@ from .core.schedule import (
     brain_cycle_slot,
     due_routines,
     provider_routine_grace_periods,
+    provider_routine_start_delays,
     recoverable_routines,
     recovery_slots,
     stockholm_now,
@@ -163,16 +164,22 @@ def run_daemon(db, analyzer, trader, brain=None, student=None):
 
             if schedule_evidence_ready:
                 try:
+                    market_data_mode = db.get_authorized_market_data_mode(now)
                     grace_periods = provider_routine_grace_periods(
-                        db.get_authorized_market_data_mode(now)
+                        market_data_mode
+                    )
+                    start_delays = provider_routine_start_delays(
+                        market_data_mode
                     )
                 except Exception:
                     grace_periods = {}
+                    start_delays = {}
                 if grace_periods:
                     current_routines = due_routines(
                         now,
                         completed=completed_routines,
                         grace_periods=grace_periods,
+                        start_delays=start_delays,
                     )
                 else:
                     current_routines = due_routines(

@@ -43,6 +43,7 @@ REQUIRED_TABLES = {
     "paper_benchmark_evaluations",
     "paper_benchmark_experiments",
     "paper_benchmark_lifecycle_events",
+    "paper_execution_cost_policies",
     "portfolio_history",
     "portfolio_valuation_marks",
     "position_lots",
@@ -100,6 +101,7 @@ REQUIRED_TRADE_COLUMNS = {
     "source_book_state_id",
     "strategy_version",
     "benchmark_experiment_id",
+    "paper_execution_cost_policy_id",
 }
 
 REQUIRED_SYNC_COLUMNS = {
@@ -115,6 +117,11 @@ REQUIRED_INSTRUMENT_COLUMNS = {
     "cfi_code",
     "notional_currency",
     "reference_snapshot_date",
+}
+
+REQUIRED_COMPANY_COLUMNS = {
+    "sector_source",
+    "sector_verified_at",
 }
 
 REQUIRED_REFERENCE_MEMBERSHIP_COLUMNS = {
@@ -286,6 +293,15 @@ def test_runtime_schema_is_complete(connection):
             """
         )
         instrument_columns = {row[0] for row in cursor.fetchall()}
+
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'companies'
+            """
+        )
+        company_columns = {row[0] for row in cursor.fetchall()}
 
         cursor.execute(
             """
@@ -469,7 +485,8 @@ def test_runtime_schema_is_complete(connection):
         REQUIRED_PROVIDER_VALIDATION_COLUMNS
         <= provider_validation_columns
     )
-    assert schema_version == 45
+    assert schema_version == 48
+    assert REQUIRED_COMPANY_COLUMNS <= company_columns
     assert REQUIRED_AI_DECISION_COLUMNS <= ai_decision_columns
     assert REQUIRED_MARKET_BAR_COLUMNS <= market_bar_columns
     assert REQUIRED_MARKET_QUOTE_COLUMNS <= market_quote_columns

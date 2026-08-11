@@ -74,6 +74,29 @@ def provider_routine_grace_periods(
     return {"open": max(_GRACE_PERIOD, provider_window)}
 
 
+def provider_routine_start_delays(
+    market_data_mode: Mapping[str, object],
+) -> dict[str, timedelta]:
+    """Delay open work until the provider can expose its first book."""
+    if not isinstance(market_data_mode, Mapping):
+        raise ValueError("market_data_mode must be a mapping")
+    if market_data_mode.get("data_type") != "delayed-pre-trade-equity":
+        return {}
+    nominal_delay = market_data_mode.get("nominal_delay_seconds")
+    if (
+        isinstance(nominal_delay, bool)
+        or not isinstance(nominal_delay, int)
+        or not 0 <= nominal_delay <= 24 * 60 * 60
+    ):
+        raise ValueError(
+            "nominal_delay_seconds must be a non-negative int"
+        )
+    return {
+        "open": timedelta(seconds=nominal_delay)
+        + _PROVIDER_PROCESSING_ALLOWANCE
+    }
+
+
 def _routine_grace_period(
     name: str,
     grace_periods: Mapping[str, timedelta] | None,
@@ -85,6 +108,21 @@ def _routine_grace_period(
         days=1
     ):
         raise ValueError("routine grace period must be between 20 minutes and 1 day")
+    return value
+
+
+def _routine_start_delay(
+    name: str,
+    start_delays: Mapping[str, timedelta] | None,
+) -> timedelta:
+    if start_delays is None or name not in start_delays:
+        return timedelta(0)
+    value = start_delays[name]
+    if (
+        not isinstance(value, timedelta)
+        or not timedelta(0) <= value <= timedelta(days=1)
+    ):
+        raise ValueError("routine start delay must be between 0 and 1 day")
     return value
 
 
@@ -131,6 +169,7 @@ def due_routines(
     *,
     completed: AbstractSet[str],
     grace_periods: Mapping[str, timedelta] | None = None,
+    start_delays: Mapping[str, timedelta] | None = None,
 ) -> list[DueRoutine]:
     """Return routines due within a bounded local-time grace window."""
     local_now = stockholm_now(now)
@@ -143,10 +182,9 @@ def due_routines(
         )
         delay = local_now - scheduled_at
         routine = DueRoutine(name=name, scheduled_at=scheduled_at)
-        if timedelta(0) <= delay <= _routine_grace_period(
-            name,
-            grace_periods,
-        ):
+        starts_at = _routine_start_delay(name, start_delays)
+        expires_at = _routine_grace_period(name, grace_periods)
+        if starts_at <= delay <= expires_at:
             if routine.key not in completed:
                 result.append(routine)
     return result

@@ -353,6 +353,29 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  sector-sync:
+    profiles: ["market-data"]
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      universe-sync:
+        condition: service_healthy
+    command: ["python", "-m", "src.sector_sync", "daemon"]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+      ENABLE_NASDAQ_SECTOR_SYNC: ${ENABLE_NASDAQ_SECTOR_SYNC:-true}
+      NASDAQ_SECTOR_MINIMUM_COVERAGE: ${NASDAQ_SECTOR_MINIMUM_COVERAGE:-0.95}
+      SECTOR_SYNC_INTERVAL_SECONDS: ${SECTOR_SYNC_INTERVAL_SECONDS:-86400}
+      PYTHONUNBUFFERED: "1"
+    secrets:
+      - source: database_url
+        target: database_url
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    restart: unless-stopped
+
   market-sync:
     profiles: ["market-data"]
     image: ${AGENT_IMAGE:?AGENT_IMAGE must be an immutable digest}
