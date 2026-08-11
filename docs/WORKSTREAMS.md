@@ -5,17 +5,21 @@ medvetet väntar. Detaljerade framtidskrav ligger kvar i `ROADMAP.md`.
 
 | Prioritet | Arbetsström | Status | Nästa verifierbara resultat |
 | --- | --- | --- | --- |
-| P0 | Recovery och GitHub | Mergad till `main`, CI och release gröna | Bevara mergecommit och releasekörning i nästa deploymentbevis |
+| P0 | Recovery och GitHub | Mergad till `main`, CI och release gröna | Bevara PR #15–18, `45ad55d` och releasekörning `31491657173` |
 | P0 | Öppningsrutin | Fixad och regressionstestad | Verifiera nästa öppna XSTO-session efter release |
-| P0 | Releaseproveniens | Implementerad | Första officiella image verifieras commit→digest i staging |
-| P0 | Schema 45-transition | Beslut krävs | Snapshot, underhållsfönster och explicit backout för första release |
-| P1 | Benchmark-preflight | Implementerad lokalt | Kör mot staging efter schema-45-release och lös rapporterade blockerare |
-| P1 | Historisk data | Leveransgate klar, data saknas | Välj licens/produkt, lägg sampleverans och bygg formatadapter |
+| P0 | Releaseproveniens | Verifierad i staging | Bevara digest, OCI-revision, manifest och compose-checksumma |
+| P0 | Schema 45-transition | Genomförd och verifierad | Behåll validerad dump och compose-snapshot |
+| P0 | Paper-agentens sektorfrihet | Hård sektorgate borttagen och livebevisad av Attendo-köpet | Följ faktisk avkastning och koncentration som analysinformation |
+| P0 | Paper-exekvering | Quote-retry och likviditetsanpassad delvis fyllnad deployade; 2 av 2 efterföljande AI-köp genomförda | Följ nästa order där önskad storlek faktiskt överstiger toppvolymen |
+| P1 | Benchmark-preflight | Aktiv i staging | Lös rapporterade externa data- och förregistreringsblockerare |
+| P1 | Kostnadsfri XSTO-period | Aktiv med cirka 15 minuter fördröjd data | Samla 6–12 månaders paper-evidens mot målet 30 procent |
+| P1 | Historisk data | Leveransgate klar, inköp uppskjutet | Ta upp licens/produkt först när nyttan motiverar kostnaden |
 | P1 | Kontinuerligt lärande | Automatisk evidens, aktivering och återställning i paper trading | Fortsätt samla sessioner och följ policyövergångarnas evidens |
-| P1 | Dokumentation och projektminne | Synkat efter merge | Uppdatera efter nästa bestående driftbeslut |
+| P1 | Dokumentation och projektminne | Cortex uppdaterat; Git/Neo4j synkas med slutbevis | Uppdatera efter nästa bestående driftbeslut |
 | P1 | Forward benchmark | Blockerad av data och beslut | Ren ledger, frysta antaganden och godkänd förregistrering |
 | P1 | Tradinggraf | Shadow-only | Oberoende evidens före eventuell operativ aktivering |
-| P2 | Broker och riktiga pengar | Avsiktligt blockerad | Separat beslut först efter godkänt forward-benchmark |
+| P2 | USA-marknad | Avsiktligt uppskjuten | Separat beslut när XSTO-evidensen känns tillräcklig |
+| P2 | Broker och riktiga pengar | Avsiktligt blockerad | Separat uttryckligt beslut efter paperutvärdering |
 
 ## Arbetsregel
 

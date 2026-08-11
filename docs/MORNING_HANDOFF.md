@@ -2,96 +2,72 @@
 
 ## Resultat
 
-Allt säkert internt arbete som kunde göras utan köp, avtal, KYC, riktiga
-pengar eller operatörens finansiella beslut är mergat till `main`. CI och den
-immutabla releasebyggnaden är gröna. Staging kör schema 45 från den verifierade
-releasen `a1ca715380f3e496cddcfc7373205b84adbac4dd`.
+Paper-agenten är igång på staging och arbetar autonomt med Stockholmsbörsens
+styrda universum. Slutreleasen är
+`45ad55de6848b94dc1cd090c0a396cee2d80ce85`, schema 45. Alla tio långlivade
+tjänster är healthy, readiness och tradingstatus är `READY`, blockerlistan är
+tom och real-money-vägen är fortfarande avstängd.
 
-Det innebär:
+Målet är 30 procent avkastning på 20 000 SEK under 6–12 månader. Första fasen
+kostar 0 kronor och använder cirka 15 minuter fördröjd XSTO-data. Målet är
+ambitiöst och ska utvärderas på faktisk paper-evidens, inte beskrivas som en
+garanterad avkastning.
 
-- provider-medveten öppningsgrace med regression för den observerade
-  09:20:45-leveransen;
-- commit-till-image-proveniens som verifieras före databasmigrering;
-- fail-closed benchmark-preflight med maskinläsbara blockerare och
-  operatörsinput;
-- schema 45 med starkare bindning mellan datavalidering och exakt
-  referenssnapshot;
-- checksummebunden leveranskontroll för all historik som krävs före backtest;
-- automatisk aktivering av framåttestade kandidatpolicyer i paper trading,
-  med automatisk återställning efter verifierad försämring.
+## Klart under arbetspasset
 
-## Beslut och externa åtgärder, i ordning
+- PR #15 tog bort den hårda sektorgaten och kravet på klassificerad sektor i
+  paper trading.
+- PR #16 gav quote-läsningen en kort, begränsad retry när den krockar med en
+  pågående marknadsdatacommit.
+- PR #17 gjorde sektorkoncentration och äldre sektorlarm informativa även i
+  driftstatusen.
+- PR #18 införde realistisk delvis fyllnad mot verifierad toppvolym för både
+  köp och sälj.
+- GitHub-CI `31491482519` passerade med 679 agenttester och 66
+  dashboardtester. Release `31491657173` är revisions- och digestlåst.
+- Ett misslyckat mellanreleaseförsök återställdes automatiskt utan dataförlust;
+  backoutkedjan är därmed också liveverifierad.
+- Agenten köpte Attendo automatiskt som tredje öppna
+  `Unclassified`-position. Efter slutdeploymenten valde den Isofol Medical och
+  Atlas Copco, validerade 2 av 2 beslut och genomförde båda köpen.
+- Paper-ledgern innehåller nio affärer. Senaste portföljsnapshot: 4 419,53 SEK
+  kassa och 19 437,67 SEK totalvärde; Attendo, Orrön Energy, Intrum, Isofol
+  Medical och Atlas Copco är öppna positioner.
+- Nästa slot analyserade 158 kandidater, avstod korrekt från nya köp när fem
+  positioner redan var öppna och avslutades `SUCCEEDED`. Senaste
+  lärandekörningen märkte 139 utfall och avslutades också `SUCCEEDED`.
 
-### 1. GitHub- och releasekedjan — klart
+## Beslut att ta senare
 
-PR #10 mergades till `main` som `6be95b57f472c5393b01044d52562fb17d7372c5`.
-PR #11 uppgraderade release-actions. Den deployade staging-releasen är
-`a1ca715380f3e496cddcfc7373205b84adbac4dd`; agent- och dashboard-images samt
-release-manifestet byggdes från exakt denna revision.
+### 1. USA-expansion
 
-### 2. Första schema-45-releasens transition — klart
+Ingen tidpunkt behöver väljas nu. När XSTO-perioden ger tillräcklig stabil
+evidens beslutas vilka USA-marknader och datakällor som ska läggas till.
 
-En validerad PostgreSQL-dump samt snapshots av Compose-konfiguration och
-migrationsfiler togs före övergången. Schema 45 migrerades, samtliga långlivade
-tjänster startades från digest-låsta images och OCI-revisionen verifierades mot
-GitHub-releasen.
+### 2. Betald realtidsdata
 
-Efterkontrollen visar intern readiness `READY`, friska tjänster och korrekt
-operationsblockering `XSTO_SESSION_NOT_OPEN` utanför börsens öppettid.
+Budgeten är 0 kronor tills vidare. Realtidsdata köps först när den fördröjda
+paperperioden visar att förbättrad latens sannolikt är värd kostnaden.
 
-### 3. Skaffa den styrda historikleveransen
+### 3. Riktiga pengar
 
-Extern åtgärd: välj och licensiera produkter som tillsammans innehåller:
+Ingen brokerkontakt, KYC eller real-money-aktivering är gjord eller
+auktoriserad. Det kräver ett separat uttryckligt beslut efter tillräcklig
+paperhistorik och en gemensam genomgång av resultat, drawdown och incidenter.
 
-- full XSTO-universumhistorik;
-- daglig OHLCV med definierad justeringspolicy;
-- corporate actions;
-- OMXSGI total-return-serie;
-- officiell marknadskalender;
-- dokumenterade rättigheter för lagring, intern analys och härledda resultat.
+### 4. Strikt licensierat benchmark
 
-Lägg därefter leveransmanifestet och samplefilerna genom
-`python -m src.historical_data_preflight --manifest <manifest>`. Kontrollen kan
-godkänna leveransen för adapterkartläggning, men säger avsiktligt inte att
-backtest är redo innan den formatspecifika importern finns och har verifierats.
+Kodvägen för ett strikt forward-benchmark finns kvar men kräver licensierad
+historik, ren separat ledger och frysta antaganden. Det är inte ett hinder för
+den pågående kostnadsfria paperperioden och behöver inte beslutas nu.
 
-### 4. Välj en ren benchmark-ledger
+## Det som nu sker automatiskt
 
-Beslut: använd en separat tom paper-ledger eller godkänn en kontrollerad
-arkivering/återställning av befintlig staging-ledger. Benchmarkkontraktet kräver
-exakt 20 000 SEK, inga positioner och inga tidigare benchmarkaffärer.
-
-Rekommendation: separat isolerad benchmarkmiljö. Det bevarar nuvarande
-paperhistorik och ger renare evidens.
-
-### 5. Frys benchmarkantagandena
-
-Beslut krävs för:
-
-- courtage/avgifter;
-- slippage;
-- exekveringsprisregel;
-- vald quote-provider och OMXSGI-provider;
-- godkännandekriterier och incidentregler.
-
-### 6. Frys modellbeviset
-
-Beslut: välj exakt modellbackend/modellnamn och spara det verifierade bevis som
-förregistreringen ska binda. Modellbyte efter start får inte ske tyst.
-
-### 7. Godkänn experimentidentiteten
-
-Beslut: välj experimentnyckel, operatörsidentitet och godkänn den kompletta
-förregistreringen först när preflight rapporterar noll blockerare.
-
-### 8. Vänta med broker och riktiga pengar
-
-Ingen brokerkontakt, KYC eller real-money-aktivering behövs nu. Det blir ett
-separat beslut först efter minst 252 genomförda XSTO-sessioner, minst 30
-stängda affärer och godkänt benchmark utan kritiska incidenter.
-
-## Körordning efter besluten
-
-1. Skaffa och verifiera data; bygg och testa formatadaptern mot samplefiler.
-2. Skapa ren benchmarkmiljö och frys förregistreringen.
-3. Starta forward-benchmarket först när alla maskinella gates är gröna.
+- marknadsdata och universum uppdateras fortlöpande;
+- hjärnan analyserar och beslutar var femtonde minut under marknadsdrift;
+- affärer kräver färskt, exakt prisbevis men är inte sektorbegränsade;
+- orderstorlek anpassas till verifierad tillgänglig toppvolym;
+- prediktioner, beslut, affärer och utfall journalförs;
+- lärandearbetaren kör var femte minut;
+- paper-policyer kan aktiveras och återställas automatiskt först efter sin
+  evidensgate.
