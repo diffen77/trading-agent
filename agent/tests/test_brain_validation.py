@@ -686,6 +686,94 @@ def test_public_pretrade_buy_uses_book_side_and_intraday_warmup():
     assert validated[0]["source_book_state_id"] == 73
 
 
+def test_public_pretrade_buy_retries_during_batch_commit(monkeypatch):
+    checked_at = datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc)
+    retry_at = checked_at + timedelta(seconds=5)
+    calls = []
+    sleeps = []
+    db = FakeDatabase()
+    db.require_operational_market_data = lambda _now: {
+        "provider": "nasdaq-nordic",
+        "data_type": "delayed-pre-trade-equity",
+        "eligible_instrument_count": 1,
+        "expected_instrument_count": 1,
+    }
+
+    def execution_quote(ticker, *, action, now):
+        calls.append((ticker, action, now))
+        if len(calls) == 1:
+            return None
+        return QuoteRecord(
+            book_state_id=74,
+            isin="SE0000115446",
+            mic="XSTO",
+            event_time=now - timedelta(minutes=15),
+            received_at=now,
+            source="nasdaq-nordic-public-pretrade",
+            last_price=101,
+            currency="SEK",
+            volume=1000,
+        )
+
+    db.get_latest_authorized_execution_quote = execution_quote
+    db.get_authorized_intraday_signal = lambda ticker, *, now, window: {
+        "ticker": ticker,
+        "session_date": now.date(),
+        "book_state_id": 74,
+        "sma20": 100,
+        "window": window,
+    }
+    brain = make_brain(db)
+    clock = iter((checked_at, retry_at))
+    brain._now_utc = lambda: next(clock)
+    monkeypatch.setattr(
+        brain_module,
+        "sleep",
+        lambda seconds: sleeps.append(seconds),
+        raising=False,
+    )
+
+    validated = brain.validate_decisions(response(buy()))
+
+    assert [decision["ticker"] for decision in validated] == ["VOLV-B"]
+    assert calls == [
+        ("VOLV-B", "BUY", checked_at),
+        ("VOLV-B", "BUY", retry_at),
+    ]
+    assert sleeps == [5]
+
+
+def test_execution_quote_retry_is_bounded(monkeypatch):
+    checked_at = datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc)
+    calls = []
+    sleeps = []
+    db = FakeDatabase()
+
+    def missing_quote(ticker, *, action, now):
+        calls.append((ticker, action, now))
+        return None
+
+    db.get_latest_authorized_execution_quote = missing_quote
+    brain = make_brain(db)
+    clock = iter(
+        checked_at + timedelta(seconds=5 * attempt)
+        for attempt in range(4)
+    )
+    brain._now_utc = lambda: next(clock)
+    monkeypatch.setattr(
+        brain_module,
+        "sleep",
+        lambda seconds: sleeps.append(seconds),
+        raising=False,
+    )
+
+    validated = brain.validate_decisions(response(buy()))
+
+    assert validated == []
+    assert len(calls) == 4
+    assert sleeps == [5, 5, 5]
+
+
 def test_stale_intraday_quote_blocks_buy():
     db = FakeDatabase()
     def stale_quote(_ticker):

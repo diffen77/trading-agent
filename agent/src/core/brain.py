@@ -11,6 +11,7 @@ import hashlib
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
+from time import sleep
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -353,8 +354,26 @@ class TradingBrain:
             "get_latest_authorized_execution_quote",
             None,
         )
+        quote_checked_at = now
         if callable(execution_reader):
-            quote = execution_reader(ticker, action=action, now=now)
+            quote = None
+            for attempt in range(4):
+                quote = execution_reader(
+                    ticker,
+                    action=action,
+                    now=quote_checked_at,
+                )
+                if quote is not None:
+                    break
+                if attempt < 3:
+                    logger.info(
+                        "Execution quote for %s is unavailable; "
+                        "retrying in 5 seconds (%d/3)",
+                        ticker,
+                        attempt + 1,
+                    )
+                    sleep(5)
+                    quote_checked_at = self._now_utc()
         else:
             # Compatibility for older adapters; the production Database always
             # supplies the action-specific execution reader.
@@ -378,7 +397,7 @@ class TradingBrain:
             ) from exc
         assert_fresh_quote(
             quote,
-            now=now,
+            now=quote_checked_at,
             policy=FreshnessPolicy(
                 max_delay=timedelta(minutes=max_delay_minutes),
                 tolerance=timedelta(minutes=tolerance_minutes),
