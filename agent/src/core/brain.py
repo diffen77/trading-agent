@@ -10,6 +10,7 @@ import json
 import hashlib
 import logging
 import math
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import date, datetime, timedelta, timezone
 from time import sleep
 from typing import Dict, Any, List, Optional
@@ -914,6 +915,14 @@ class TradingBrain:
             d['source_book_state_id'] = quote.book_state_id
             d['price_event_time'] = quote.event_time
             d['price_source'] = quote.source
+            if quote.book_state_id is not None:
+                if quote.volume is None or quote.volume <= 0:
+                    logger.info(
+                        f"🚫 {ticker} rejected: executable book quantity "
+                        "is missing"
+                    )
+                    continue
+                d['executable_quantity'] = float(quote.volume)
 
             if confidence <= config.min_confidence:
                 logger.info(
@@ -1167,6 +1176,9 @@ class TradingBrain:
                         'source_book_state_id': d.get(
                             'source_book_state_id'
                         ),
+                        'executable_quantity': d.get(
+                            'executable_quantity'
+                        ),
                         'idempotency_key': idempotency_key,
                         'decision_id': decision_id,
                         'decision_origin': 'AI_DECISION',
@@ -1190,13 +1202,59 @@ class TradingBrain:
                     if price is None:
                         continue
                     price = float(price)
+                    if d.get('source_book_state_id') is not None:
+                        try:
+                            executable_quantity = Decimal(
+                                str(d.get('executable_quantity'))
+                            )
+                        except (InvalidOperation, TypeError, ValueError):
+                            logger.info(
+                                f"🚫 {ticker} SELL rejected: executable "
+                                "book quantity is invalid"
+                            )
+                            continue
+                        if (
+                            not executable_quantity.is_finite()
+                            or executable_quantity <= 0
+                        ):
+                            logger.info(
+                                f"🚫 {ticker} SELL rejected: executable "
+                                "book quantity is invalid"
+                            )
+                            continue
+                        executable_quantity = executable_quantity.quantize(
+                            Decimal('0.0001'),
+                            rounding=ROUND_DOWN,
+                        )
+                        if executable_quantity <= 0:
+                            logger.info(
+                                f"🚫 {ticker} SELL rejected: executable "
+                                "book quantity is below trade precision"
+                            )
+                            continue
+                        original_shares = shares
+                        shares = float(min(
+                            Decimal(str(shares)),
+                            executable_quantity,
+                        ).quantize(
+                            Decimal('0.0001'),
+                            rounding=ROUND_DOWN,
+                        ))
+                        if shares < original_shares:
+                            logger.info(
+                                f"Partial SELL {ticker}: capped from "
+                                f"{original_shares:.4f} to {shares:.4f} "
+                                "shares by executable book quantity"
+                            )
 
                     trade = {
                         'ticker': ticker,
                         'action': 'SELL',
                         'shares': shares,
                         'price': price,
-                        'total_value': shares * price,
+                        'total_value': float((
+                            Decimal(str(shares)) * Decimal(str(price))
+                        ).quantize(Decimal('0.01'))),
                         'reasoning': d.get('reason', 'AI sell decision'),
                         'confidence': d.get('confidence', 70),
                         'hypothesis': f"AI exit: {d.get('reason', '')}",
