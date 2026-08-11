@@ -8,9 +8,9 @@ Studies:
 1. Backtest Engine - Tests strategies against historical data
 2. Report Study - Analyzes stock reactions to earnings reports  
 3. Trade Review - Deep analysis of all past trades using Claude
-4. News Research - Scrapes news for our companies and sentiment analysis
+4. News Research - Blocked until an authorized provider is configured
 5. Strategy Evolution - Analyzes what types of trades work best
-6. Self-Study - Researches external sources for OMX-specific patterns
+6. Self-Study - Blocked until an authorized provider is configured
 
 Schedule:
 - Regular study cycles: Every 60 minutes outside market hours
@@ -19,10 +19,11 @@ Schedule:
 
 import logging
 import json
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 try:
     import anthropic
@@ -31,6 +32,7 @@ except ImportError:
     HAS_ANTHROPIC = False
 
 from .brain import TradingBrain
+from ..runtime_secrets import read_runtime_secret
 
 logger = logging.getLogger(__name__)
 
@@ -38,45 +40,85 @@ logger = logging.getLogger(__name__)
 class TradingStudent:
     """Continuous learning engine for the trading agent."""
     
-    def __init__(self, db, web_search_func=None):
+    def __init__(self, db):
         self.db = db
-        self.web_search = web_search_func  # Function for web searches
         
         # Initialize Claude client for deep trade analysis
         self.claude_client = None
         if HAS_ANTHROPIC:
-            import os
-            api_key = os.getenv("ANTHROPIC_API_KEY")
+            api_key = read_runtime_secret(
+                "ANTHROPIC_API_KEY",
+                default=None,
+            )
             if api_key:
                 self.claude_client = anthropic.Anthropic(api_key=api_key)
     
-    def is_market_hours(self) -> bool:
-        """Check if we're currently in market hours (07:00-17:30 UTC)."""
-        now = datetime.utcnow()
-        hour = now.hour
-        # Swedish market hours in UTC: 07:00-17:30 (09:00-18:30 CET with DST adjustments)
-        return 7 <= hour <= 17 and now.weekday() < 5
-    
-    def should_run_study(self) -> bool:
+    def is_market_hours(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Use the current official XSTO session; fail closed on calendar errors."""
+        checked_at = now or datetime.now(timezone.utc)
+        if (
+            checked_at.tzinfo is None
+            or checked_at.utcoffset() is None
+        ):
+            raise ValueError("now must be timezone-aware")
+        checked_at = checked_at.astimezone(timezone.utc)
+        session_date = checked_at.astimezone(
+            ZoneInfo("Europe/Stockholm")
+        ).date()
+        try:
+            session = self.db.get_market_session("XSTO", session_date)
+        except Exception as error:
+            logger.error(
+                "Student calendar check failed; study is blocked: %s",
+                error,
+            )
+            return True
+        return session is not None and session.is_open(checked_at)
+
+    def should_run_study(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
         """Determine if we should run a study cycle now."""
-        return not self.is_market_hours()
+        return not self.is_market_hours(now=now)
     
-    def study_cycle(self) -> Dict[str, Any]:
+    def study_cycle(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> Dict[str, Any]:
         """
         Regular study cycle (60-minute intervals outside market hours).
         Rotates between different study types to spread the load.
         """
-        if not self.should_run_study():
+        checked_at = now or datetime.now(timezone.utc)
+        if (
+            checked_at.tzinfo is None
+            or checked_at.utcoffset() is None
+        ):
+            raise ValueError("now must be timezone-aware")
+        checked_at = checked_at.astimezone(timezone.utc)
+        if not self.should_run_study(now=checked_at):
             logger.info("📚 Skipping study - market hours active")
             return {'status': 'skipped', 'reason': 'market_hours'}
-        
-        now = datetime.utcnow()
-        hour = now.hour
-        
-        logger.info(f"📚 Starting study cycle (UTC {hour:02d}:00)")
+
+        local_now = checked_at.astimezone(
+            ZoneInfo("Europe/Stockholm")
+        )
+        hour = local_now.hour
+
+        logger.info(
+            f"📚 Starting study cycle "
+            f"({local_now.strftime('%H:%M %Z')})"
+        )
         
         results = {
-            'timestamp': now,
+            'timestamp': checked_at,
             'studies_completed': [],
             'insights_generated': 0,
             'learnings_added': 0,
@@ -114,25 +156,61 @@ class TradingStudent:
             
             if study_type == 'backtest':
                 result = self.run_backtest_engine()
-                results['studies_completed'].append('backtest')
+                if result.get('status') == 'blocked':
+                    results.setdefault('studies_blocked', []).append({
+                        'study': 'backtest',
+                        'reason': result.get('reason'),
+                    })
+                else:
+                    results['studies_completed'].append('backtest')
             elif study_type == 'trade_review':
                 result = self.run_trade_review()
-                results['studies_completed'].append('trade_review')
-                results['learnings_added'] += result.get('learnings_added', 0)
+                if result.get('status') == 'blocked':
+                    results.setdefault('studies_blocked', []).append({
+                        'study': 'trade_review',
+                        'reason': result.get('reason'),
+                    })
+                else:
+                    results['studies_completed'].append('trade_review')
+                    results['learnings_added'] += result.get(
+                        'learnings_added',
+                        0,
+                    )
             elif study_type == 'report_study':
                 result = self.run_report_study()
-                results['studies_completed'].append('report_study')
+                if result.get('status') == 'blocked':
+                    results.setdefault('studies_blocked', []).append({
+                        'study': 'report_study',
+                        'reason': result.get('reason'),
+                    })
+                else:
+                    results['studies_completed'].append('report_study')
             elif study_type == 'news_research':
                 result = self.run_news_research()
-                results['studies_completed'].append('news_research')
+                if result.get('status') == 'blocked':
+                    results.setdefault('studies_blocked', []).append({
+                        'study': 'news_research',
+                        'reason': result.get('reason'),
+                    })
+                else:
+                    results['studies_completed'].append('news_research')
             elif study_type == 'strategy_evolution':
                 result = self.run_strategy_evolution()
                 results['studies_completed'].append('strategy_evolution')
                 results['insights_generated'] += result.get('insights_added', 0)
             elif study_type == 'self_study':
                 result = self.run_self_study()
-                results['studies_completed'].append('self_study')
-                results['insights_generated'] += result.get('insights_added', 0)
+                if result.get('status') == 'blocked':
+                    results.setdefault('studies_blocked', []).append({
+                        'study': 'self_study',
+                        'reason': result.get('reason'),
+                    })
+                else:
+                    results['studies_completed'].append('self_study')
+                    results['insights_generated'] += result.get(
+                        'insights_added',
+                        0,
+                    )
                 
         except Exception as e:
             logger.error(f"Error in {study_type}: {e}", exc_info=True)
@@ -141,19 +219,30 @@ class TradingStudent:
         logger.info(f"📚 Study cycle complete: {study_type} | {results['studies_completed']}")
         return results
     
-    def deep_study(self) -> Dict[str, Any]:
+    def deep_study(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> Dict[str, Any]:
         """
         Deep study cycle (weekends, every 2 hours). 
         Runs multiple studies per cycle for comprehensive analysis.
         """
-        if self.is_market_hours():
+        checked_at = now or datetime.now(timezone.utc)
+        if (
+            checked_at.tzinfo is None
+            or checked_at.utcoffset() is None
+        ):
+            raise ValueError("now must be timezone-aware")
+        checked_at = checked_at.astimezone(timezone.utc)
+        if self.is_market_hours(now=checked_at):
             logger.info("📚 Skipping deep study - market hours active")
             return {'status': 'skipped', 'reason': 'market_hours'}
         
         logger.info("📚🔬 Starting DEEP study cycle (weekend mode)")
         
         results = {
-            'timestamp': datetime.utcnow(),
+            'timestamp': checked_at,
             'studies_completed': [],
             'insights_generated': 0,
             'learnings_added': 0,
@@ -173,6 +262,12 @@ class TradingStudent:
             try:
                 logger.info(f"📚 Running {study_name}...")
                 result = study_func()
+                if result.get('status') == 'blocked':
+                    results.setdefault('studies_blocked', []).append({
+                        'study': study_name,
+                        'reason': result.get('reason'),
+                    })
+                    continue
                 results['studies_completed'].append(study_name)
                 
                 if 'learnings_added' in result:
@@ -192,10 +287,20 @@ class TradingStudent:
     
     def run_backtest_engine(self) -> Dict[str, Any]:
         """
-        Test various strategies against historical price data.
-        Examples: 'What if we bought every golden cross in the last 3 months?'
+        Legacy entry point retained for scheduling compatibility.
+
+        Audited backtests require an operator-validated immutable dataset and
+        explicit cost assumptions, so the student may not launch them.
         """
-        logger.info("📈 Running backtest engine...")
+        logger.warning(
+            "Legacy student backtest is disabled. Use "
+            "`python -m src.backtest_runner run` with a validated dataset."
+        )
+        return {
+            'status': 'blocked',
+            'reason': 'operator_validated_dataset_required',
+            'backtests_run': 0,
+        }
         
         strategies = [
             {
@@ -282,11 +387,16 @@ class TradingStudent:
             
             try:
                 # Get price and technical data for this ticker in the period
-                price_data = self.db.query("""
-                    SELECT date, close FROM prices 
-                    WHERE ticker = :ticker AND date BETWEEN :start_date AND :end_date
-                    ORDER BY date
-                """, {'ticker': ticker, 'start_date': start_date, 'end_date': end_date})
+                price_data = [
+                    row
+                    for row in reversed(
+                        self.db.get_authorized_daily_bars(
+                            ticker,
+                            limit=250,
+                        )
+                    )
+                    if start_date <= row["date"] <= end_date
+                ]
                 
                 tech_data = self.db.query("""
                     SELECT date, rsi, sma20, sma50, pattern, pattern_signal
@@ -459,10 +569,20 @@ class TradingStudent:
     
     def run_report_study(self) -> Dict[str, Any]:
         """
-        Analyze how stocks react to earnings reports.
-        Build database of reactions per company/sector.
+        Legacy scheduling entry point.
+
+        Report reactions require immutable, governed historical bars. The
+        student may not infer them from the unaudited legacy prices table.
         """
-        logger.info("📊 Running report study...")
+        logger.warning(
+            "Report study is disabled until governed historical market data "
+            "has been ingested."
+        )
+        return {
+            "status": "blocked",
+            "reason": "governed_historical_market_data_required",
+            "reactions_analyzed": 0,
+        }
         
         # Get recent reports that we haven't analyzed yet
         unanalyzed_reports = self.db.query("""
@@ -525,16 +645,18 @@ class TradingStudent:
         """Analyze how a stock reacted to an earnings report."""
         
         # Get prices around the report date
-        price_data = self.db.query("""
-            SELECT date, close FROM prices
-            WHERE ticker = :ticker 
-            AND date BETWEEN :start_date AND :end_date
-            ORDER BY date
-        """, {
-            'ticker': ticker, 
-            'start_date': report_date - timedelta(days=5), 
-            'end_date': report_date + timedelta(days=15)
-        })
+        start_date = report_date - timedelta(days=5)
+        end_date = report_date + timedelta(days=15)
+        price_data = [
+            row
+            for row in reversed(
+                self.db.get_authorized_daily_bars(
+                    ticker,
+                    limit=250,
+                )
+            )
+            if start_date <= row["date"] <= end_date
+        ]
         
         if len(price_data) < 10:
             return None
@@ -612,10 +734,20 @@ class TradingStudent:
     
     def run_trade_review(self) -> Dict[str, Any]:
         """
-        Deep analysis of all past trades using Claude Sonnet.
-        Extract learnings about what worked and what didn't.
+        Legacy scheduling entry point.
+
+        Trade review requires immutable, governed historical bars around each
+        execution and therefore cannot consume the legacy prices/macro tables.
         """
-        logger.info("🔍 Running trade review with Claude analysis...")
+        logger.warning(
+            "Trade review is disabled until governed historical market data "
+            "has been ingested."
+        )
+        return {
+            "status": "blocked",
+            "reason": "governed_historical_market_data_required",
+            "learnings_added": 0,
+        }
         
         if not self.claude_client:
             logger.warning("Claude client not available for trade review")
@@ -623,9 +755,7 @@ class TradingStudent:
         
         # Get unreviewed closed trades (older than 7 days)
         unreviewed_trades = self.db.query("""
-            SELECT t.*, 
-                   (SELECT close FROM prices p WHERE p.ticker = t.ticker 
-                    ORDER BY date DESC LIMIT 1) as current_price
+            SELECT t.*
             FROM trades t
             WHERE t.executed_at <= CURRENT_DATE - INTERVAL '7 days'
             AND (t.claude_reviewed IS NULL OR t.claude_reviewed = false)
@@ -636,8 +766,15 @@ class TradingStudent:
         
         learnings_added = 0
         
-        for trade in unreviewed_trades:
+        for raw_trade in unreviewed_trades:
+            trade = dict(raw_trade)
             try:
+                quote = self.db.get_latest_authorized_market_quote(
+                    trade["ticker"],
+                )
+                if quote is None:
+                    continue
+                trade["current_price"] = quote.last_price
                 analysis = self._claude_analyze_trade(trade)
                 if analysis:
                     # Save learning if Claude found something significant
@@ -680,28 +817,22 @@ class TradingStudent:
             trade_date = datetime.fromisoformat(trade_date.replace('Z', '+00:00'))
         
         # Get price history around trade
-        price_history = self.db.query("""
-            SELECT date, close FROM prices
-            WHERE ticker = :ticker 
-            AND date BETWEEN :start_date AND :end_date
-            ORDER BY date
-        """, {
-            'ticker': ticker, 
-            'start_date': trade_date.date() - timedelta(days=30), 
-            'end_date': trade_date.date() + timedelta(days=30)
-        })
-        
-        # Get macro context at the time
-        macro_context = self.db.query("""
-            SELECT symbol, value, change_pct FROM macro
-            WHERE date <= :trade_date
-            ORDER BY date DESC
-            LIMIT 5
-        """, {'trade_date': trade_date.date()})
+        start_date = trade_date.date() - timedelta(days=30)
+        end_date = trade_date.date() + timedelta(days=30)
+        price_history = [
+            row
+            for row in reversed(
+                self.db.get_authorized_daily_bars(
+                    ticker,
+                    limit=250,
+                )
+            )
+            if start_date <= row["date"] <= end_date
+        ]
         
         # Build context for Claude
         price_text = "\n".join([f"{p['date']}: {p['close']:.2f} SEK" for p in price_history[-10:]])
-        macro_text = "\n".join([f"{m['symbol']}: {m['value']:.2f} ({m['change_pct']:+.1f}%)" for m in macro_context])
+        macro_text = "Styrkt historisk makrodata är inte tillgänglig."
         
         pnl_pct = ((current_price / entry_price) - 1) * 100
         days_since = (datetime.now().date() - trade_date.date()).days
@@ -766,10 +897,17 @@ Svara med JSON:
     
     def run_news_research(self) -> Dict[str, Any]:
         """
-        Research news about our companies, analyze sentiment trends,
-        find upcoming catalysts (reports, product launches, M&A).
+        Block external news research until its provider is governed.
         """
-        logger.info("📰 Running news research...")
+        logger.warning(
+            "News research is disabled until an authorized provider with "
+            "provenance has been configured."
+        )
+        return {
+            "status": "blocked",
+            "reason": "authorized_research_provider_required",
+            "research_notes_added": 0,
+        }
         
         # Get our tracked companies
         companies = self.db.query("SELECT ticker, name, sector FROM companies LIMIT 20")
@@ -906,7 +1044,8 @@ Svara med JSON:
     def run_strategy_evolution(self) -> Dict[str, Any]:
         """
         Analyze what types of trades make the most money.
-        Generate strategy insights for the brain to use.
+        Store observations against the active strategy. Observations never
+        become active rules without a learning-backed operator proposal.
         """
         logger.info("🧠 Running strategy evolution analysis...")
         
@@ -914,6 +1053,7 @@ Svara med JSON:
         trade_analysis = self._analyze_trade_patterns()
         
         insights_added = 0
+        strategy = self.db.get_active_strategy()
         
         # Generate insights from the analysis
         insights = self._generate_strategy_insights(trade_analysis)
@@ -921,13 +1061,21 @@ Svara med JSON:
         for insight in insights:
             try:
                 self.db.execute("""
-                    INSERT INTO strategy_insights (insight_type, content, confidence, evidence)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO strategy_insights (
+                        insight_type,
+                        content,
+                        confidence,
+                        evidence,
+                        strategy_version,
+                        active
+                    )
+                    VALUES (%s, %s, %s, %s, %s, FALSE)
                 """, (
                     insight['type'],
                     insight['content'],
                     insight['confidence'],
-                    insight['evidence']
+                    insight['evidence'],
+                    strategy.version,
                 ))
                 insights_added += 1
                 
@@ -945,12 +1093,15 @@ Svara med JSON:
         sector_performance = self.db.query("""
             SELECT c.sector, 
                    COUNT(t.id) as trade_count,
-                   AVG(CASE WHEN t.pnl IS NOT NULL THEN t.pnl ELSE 0 END) as avg_pnl,
+                   AVG(t.pnl) as avg_pnl,
                    AVG(CASE WHEN t.confidence IS NOT NULL THEN t.confidence ELSE 0 END) as avg_confidence,
                    SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END)::float / COUNT(t.id) * 100 as win_rate
             FROM trades t
             JOIN companies c ON c.ticker = t.ticker
             WHERE t.executed_at >= CURRENT_DATE - INTERVAL '6 months'
+              AND t.action = 'BUY'
+              AND t.closed_at IS NOT NULL
+              AND t.pnl IS NOT NULL
             GROUP BY c.sector
             HAVING COUNT(t.id) >= 3
             ORDER BY avg_pnl DESC
@@ -958,13 +1109,16 @@ Svara med JSON:
         
         # Time-based performance
         time_performance = self.db.query("""
-            SELECT EXTRACT(HOUR FROM executed_at) as hour,
+            SELECT EXTRACT(HOUR FROM t.executed_at) as hour,
                    COUNT(*) as trade_count,
-                   AVG(CASE WHEN pnl IS NOT NULL THEN pnl ELSE 0 END) as avg_pnl,
-                   SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::float / COUNT(*) * 100 as win_rate
-            FROM trades
-            WHERE executed_at >= CURRENT_DATE - INTERVAL '6 months'
-            GROUP BY EXTRACT(HOUR FROM executed_at)
+                   AVG(t.pnl) as avg_pnl,
+                   SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END)::float / COUNT(*) * 100 as win_rate
+            FROM trades t
+            WHERE t.executed_at >= CURRENT_DATE - INTERVAL '6 months'
+              AND t.action = 'BUY'
+              AND t.closed_at IS NOT NULL
+              AND t.pnl IS NOT NULL
+            GROUP BY EXTRACT(HOUR FROM t.executed_at)
             HAVING COUNT(*) >= 3
             ORDER BY avg_pnl DESC
         """)
@@ -973,17 +1127,20 @@ Svara med JSON:
         confidence_analysis = self.db.query("""
             SELECT 
                 CASE 
-                    WHEN confidence >= 80 THEN '80-100'
-                    WHEN confidence >= 70 THEN '70-79'
-                    WHEN confidence >= 60 THEN '60-69'
+                    WHEN t.confidence >= 80 THEN '80-100'
+                    WHEN t.confidence >= 70 THEN '70-79'
+                    WHEN t.confidence >= 60 THEN '60-69'
                     ELSE '50-59'
                 END as confidence_range,
                 COUNT(*) as trade_count,
-                AVG(CASE WHEN pnl IS NOT NULL THEN pnl ELSE 0 END) as avg_pnl,
-                SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::float / COUNT(*) * 100 as win_rate
-            FROM trades
-            WHERE executed_at >= CURRENT_DATE - INTERVAL '6 months'
-            AND confidence IS NOT NULL
+                AVG(t.pnl) as avg_pnl,
+                SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END)::float / COUNT(*) * 100 as win_rate
+            FROM trades t
+            WHERE t.executed_at >= CURRENT_DATE - INTERVAL '6 months'
+              AND t.action = 'BUY'
+              AND t.closed_at IS NOT NULL
+              AND t.pnl IS NOT NULL
+              AND t.confidence IS NOT NULL
             GROUP BY confidence_range
             ORDER BY avg_pnl DESC
         """)
@@ -1048,16 +1205,25 @@ Svara med JSON:
     
     def run_self_study(self) -> Dict[str, Any]:
         """
-        Search web for trading strategies specific to Swedish stocks.
-        Study OMX-specific patterns like Friday effect, earnings seasonality.
+        Block external strategy research until its provider is governed.
         """
-        logger.info("📚 Running self-study with external research...")
+        logger.warning(
+            "Self-study is disabled until an authorized research provider "
+            "with provenance has been configured."
+        )
+        return {
+            "status": "blocked",
+            "reason": "authorized_research_provider_required",
+            "insights_added": 0,
+        }
         
         insights_added = 0
         
         if not self.web_search:
             logger.warning("Web search not available for self-study")
             return {'insights_added': 0}
+
+        strategy = self.db.get_active_strategy()
         
         # Research topics for OMX/Swedish market patterns
         research_topics = [
@@ -1079,13 +1245,21 @@ Svara med JSON:
                     if insight:
                         # Save insight
                         self.db.execute("""
-                            INSERT INTO strategy_insights (insight_type, content, confidence, evidence)
-                            VALUES (%s, %s, %s, %s)
+                            INSERT INTO strategy_insights (
+                                insight_type,
+                                content,
+                                confidence,
+                                evidence,
+                                strategy_version,
+                                active
+                            )
+                            VALUES (%s, %s, %s, %s, %s, FALSE)
                         """, (
                             'external_research',
                             insight['content'],
                             insight['confidence'],
-                            f"Source: {result.get('title', 'External research')}"
+                            f"Source: {result.get('title', 'External research')}",
+                            strategy.version,
                         ))
                         insights_added += 1
                         

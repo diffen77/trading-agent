@@ -1,31 +1,18 @@
 """
 Market Analyzer
 
-Analyzes companies, macro factors, and finds trading opportunities.
-Uses company database with input dependencies for impact analysis.
+Analyzes companies and governed market data to find trading opportunities.
 """
 
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-# Macro symbol display names
-MACRO_SYMBOLS = {
-    'GC=F': {'name': 'Guld', 'type': 'commodity'},
-    'SI=F': {'name': 'Silver', 'type': 'commodity'},
-    'HG=F': {'name': 'Koppar', 'type': 'commodity'},
-    'BZ=F': {'name': 'Brent Olja', 'type': 'commodity'},
-    'NG=F': {'name': 'Naturgas', 'type': 'commodity'},
-    'EURSEK=X': {'name': 'EUR/SEK', 'type': 'currency'},
-    'USDSEK=X': {'name': 'USD/SEK', 'type': 'currency'},
-    '^OMX': {'name': 'OMX Stockholm 30', 'type': 'index'},
-}
-
+from .candidates import rank_candidate_signals
 
 class MarketAnalyzer:
     """Analyzes market conditions and finds opportunities using company database."""
@@ -62,41 +49,105 @@ class MarketAnalyzer:
         """Get input dependencies for a company."""
         return self._deps_cache.get(ticker, [])
     
-    def get_latest_macro(self) -> Dict[str, Dict]:
-        """Get latest macro data from database."""
+    def get_authorized_market_context(
+        self,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Dict]:
+        """Get the current governed XSTO index signal."""
         try:
-            result = self.db.query("""
-                SELECT DISTINCT ON (symbol) symbol, value, change_pct, date
-                FROM macro
-                ORDER BY symbol, date DESC
-            """)
-            return {row['symbol']: row for row in result}
+            signal = self.db.get_current_authorized_index_change(
+                now or datetime.now(timezone.utc),
+            )
+            return {signal["symbol"]: signal}
         except Exception as e:
-            logger.error(f"Error fetching macro data: {e}")
+            logger.error(f"Error fetching authorized market context: {e}")
             return {}
     
     def get_latest_prices(self) -> Dict[str, Dict]:
-        """Get latest stock prices."""
+        """Get latest prices from the authorized XSTO provider."""
         try:
-            result = self.db.query("""
-                SELECT DISTINCT ON (ticker) ticker, close, date,
-                       (close - LAG(close) OVER (PARTITION BY ticker ORDER BY date)) / 
-                       NULLIF(LAG(close) OVER (PARTITION BY ticker ORDER BY date), 0) * 100 as change_pct
-                FROM prices
-                ORDER BY ticker, date DESC
-            """)
+            result = self.db.get_latest_authorized_prices()
             return {row['ticker']: row for row in result}
         except Exception as e:
             logger.error(f"Error fetching prices: {e}")
             return {}
+
+
+    def _find_intraday_opportunities(
+        self,
+        *,
+        now: datetime,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Build prospects from the authorised multi-horizon book stream."""
+        reader = getattr(
+            self.db,
+            "get_current_authorized_candidate_signals",
+            None,
+        )
+        if not callable(reader):
+            return None
+        candidates = rank_candidate_signals(
+            reader(now=now, limit=1_000),
+            limit=20,
+        )
+        opportunities = []
+        for candidate in candidates:
+            if not candidate["eligible"] or candidate["signal_score"] < 50:
+                continue
+            thesis = (
+                f"Verifierat momentum: 5 min "
+                f"{candidate['momentum_5m_pct']:+.2f} %, 20 min "
+                f"{candidate['momentum_20m_pct']:+.2f} % och 60 min "
+                f"{candidate['momentum_60m_pct']:+.2f} %. "
+                f"Spread {candidate['spread_bps']:.1f} bp och "
+                f"orderboksobalans {candidate['book_imbalance']:+.2f}."
+            )
+            opportunities.append({
+                **candidate,
+                "current_price": candidate["latest_price"],
+                "confidence": candidate["signal_score"],
+                "thesis": thesis,
+                "entry_trigger": (
+                    "Kräver fortsatt positiv 20-minuterstrend, färsk "
+                    "tvåsidig bok och oförändrade riskgrindar."
+                ),
+                "macro_sentiment": 0.0,
+                "impacts": [],
+                "score_breakdown": {
+                    "total": candidate["signal_score"],
+                    "momentum_5m_pct": candidate["momentum_5m_pct"],
+                    "momentum_20m_pct": candidate["momentum_20m_pct"],
+                    "momentum_60m_pct": candidate["momentum_60m_pct"],
+                    "spread_bps": candidate["spread_bps"],
+                    "book_imbalance": candidate["book_imbalance"],
+                },
+                "pattern": None,
+                "pattern_signal": None,
+            })
+        logger.info(
+            "candidate_scan_completed policy=%s complete=%d prospects=%d",
+            candidates[0]["policy_version"] if candidates else "none",
+            len(candidates),
+            len(opportunities),
+        )
+        return opportunities
     
-    def analyze_macro_impact(self, ticker: str) -> Dict[str, Any]:
+    def analyze_macro_impact(
+        self,
+        ticker: str,
+        market_context: Optional[Dict[str, Dict]] = None,
+    ) -> Dict[str, Any]:
         """
         Analyze how current macro conditions affect a company.
         Uses input_dependencies from database with proper impact strength.
         """
         deps = self.get_company_deps(ticker)
-        macro = self.get_latest_macro()
+        macro = (
+            market_context
+            if market_context is not None
+            else self.get_authorized_market_context()
+        )
         
         impacts = []
         weighted_score = 0
@@ -150,59 +201,76 @@ class MarketAnalyzer:
             'net_sentiment': max(-1, min(1, net_sentiment)),
         }
     
-    def find_opportunities(self) -> List[Dict[str, Any]]:
-        """
-        Find trading opportunities based on:
-        1. Macro changes weighted by input dependency strength
-        2. Price momentum
-        3. Sector conditions
-        """
+    def find_opportunities(
+        self,
+        *,
+        now: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Find governed candidates, preferring continuous pre-trade evidence."""
+        checked_at = now or datetime.now(timezone.utc)
+        if checked_at.tzinfo is None or checked_at.utcoffset() is None:
+            raise ValueError("opportunity scan clock must be timezone-aware")
+        intraday = self._find_intraday_opportunities(
+            now=checked_at.astimezone(timezone.utc),
+        )
+        if intraday is not None:
+            return intraday
+
         opportunities = []
         prices = self.get_latest_prices()
-        
+        market_context = self.get_authorized_market_context(now=checked_at)
         logger.info("🔍 Scanning for opportunities...")
-        
+
         for ticker, company in self._company_cache.items():
-            # Skip if no price data
             if ticker not in prices:
                 continue
-            
             price_data = prices[ticker]
-            current_price = float(price_data.get('close', 0))
-            
+            current_price = float(price_data.get("close", 0))
             if current_price <= 0:
                 continue
-            
-            # Analyze macro impact using DB dependencies
-            analysis = self.analyze_macro_impact(ticker)
-            
-            # Get technical signals
-            tech = self.get_technical_signals(ticker)
-            
-            # Calculate opportunity score
-            score = self._calculate_opportunity_score(
-                ticker, company, analysis, price_data, tech
+            analysis = self.analyze_macro_impact(
+                ticker,
+                market_context,
             )
-            
-            if score['total'] >= 50:
-                opp = {
-                    'ticker': ticker,
-                    'name': company.get('name', ticker),
-                    'sector': company.get('sector', ''),
-                    'current_price': current_price,
-                    'confidence': score['total'],
-                    'thesis': self._generate_thesis(ticker, company, analysis, score),
-                    'entry_trigger': self._generate_entry_trigger(ticker, current_price, score),
-                    'macro_sentiment': analysis['net_sentiment'],
-                    'impacts': analysis['impacts'],
-                    'score_breakdown': score,
-                    'pattern': tech.get('pattern') if tech else None,
-                    'pattern_signal': tech.get('pattern_signal') if tech else None,
-                }
-                opportunities.append(opp)
-                logger.info(f"  📊 {ticker}: {score['total']:.0f}% confidence")
-        
-        opportunities.sort(key=lambda x: x['confidence'], reverse=True)
+            tech = self.get_technical_signals(ticker)
+            score = self._calculate_opportunity_score(
+                ticker,
+                company,
+                analysis,
+                price_data,
+                tech,
+            )
+            if score["total"] >= 50:
+                opportunities.append({
+                    "ticker": ticker,
+                    "name": company.get("name", ticker),
+                    "sector": company.get("sector", ""),
+                    "current_price": current_price,
+                    "confidence": score["total"],
+                    "thesis": self._generate_thesis(
+                        ticker,
+                        company,
+                        analysis,
+                        score,
+                    ),
+                    "entry_trigger": self._generate_entry_trigger(
+                        ticker,
+                        current_price,
+                        score,
+                    ),
+                    "macro_sentiment": analysis["net_sentiment"],
+                    "impacts": analysis["impacts"],
+                    "score_breakdown": score,
+                    "pattern": tech.get("pattern") if tech else None,
+                    "pattern_signal": (
+                        tech.get("pattern_signal") if tech else None
+                    ),
+                })
+
+        opportunities.sort(
+            key=lambda opportunity: opportunity["confidence"],
+            reverse=True,
+        )
         logger.info(f"✅ Found {len(opportunities)} opportunities")
         return opportunities
     
@@ -212,8 +280,14 @@ class MarketAnalyzer:
     ) -> Dict[str, float]:
         """Calculate composite opportunity score with weighted dependencies and technicals."""
         
-        # Macro score (0-35 points) — weighted by dependency strength
-        macro_score = (analysis['net_sentiment'] + 1) * 17.5  # -1..1 → 0..35
+        # Governed macro evidence can contribute at most 35 points.
+        # Missing or unrelated evidence contributes zero, never a free
+        # neutral-data bonus.
+        macro_score = 0.0
+        if analysis['impacts']:
+            macro_score = (
+                analysis['net_sentiment'] + 1
+            ) * 17.5
         
         # Bonus for strong impacts (many aligned factors)
         strong_positive = sum(1 for i in analysis['impacts'] 
@@ -379,54 +453,140 @@ class MarketAnalyzer:
             support = current_price * 0.95
             return f"Avvakta - potentiell entry vid {support:.0f} kr"
     
-    def update_prospects(self) -> int:
-        """Update prospects table based on current analysis."""
-        opportunities = self.find_opportunities()
+    def update_prospects(
+        self,
+        *,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """Refresh the current prospect view from governed candidate evidence."""
+        checked_at = now or datetime.now(timezone.utc)
+        if checked_at.tzinfo is None or checked_at.utcoffset() is None:
+            raise ValueError("prospect update clock must be timezone-aware")
+        opportunities = self.find_opportunities(now=checked_at)
+        pretrade_mode = callable(
+            getattr(
+                self.db,
+                "get_current_authorized_candidate_signals",
+                None,
+            )
+        )
+        if pretrade_mode:
+            self.db.execute(
+                """
+                    UPDATE prospects
+                    SET is_current = FALSE, updated_at = NOW()
+                    WHERE is_current = TRUE
+                """
+            )
+
         updated = 0
-        
-        for opp in opportunities[:10]:
+        for priority, opportunity in enumerate(opportunities[:10], start=1):
             try:
-                self.db.execute("""
-                    INSERT INTO prospects (ticker, name, thesis, confidence, entry_trigger, priority, current_price, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (ticker, status) DO UPDATE SET
-                        thesis = EXCLUDED.thesis,
-                        confidence = EXCLUDED.confidence,
-                        entry_trigger = EXCLUDED.entry_trigger,
-                        current_price = EXCLUDED.current_price,
-                        updated_at = NOW()
-                """, (
-                    opp['ticker'],
-                    opp['name'],
-                    opp['thesis'],
-                    opp['confidence'],
-                    opp['entry_trigger'],
-                    opportunities.index(opp) + 1,
-                    opp['current_price'],
-                ))
+                if pretrade_mode:
+                    self.db.execute("""
+                        INSERT INTO prospects (
+                            ticker,
+                            name,
+                            thesis,
+                            confidence,
+                            entry_trigger,
+                            priority,
+                            current_price,
+                            is_current,
+                            policy_version,
+                            source_book_state_id,
+                            feature_checksum_sha256,
+                            evidence_at,
+                            updated_at
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s,
+                            TRUE, %s, %s, %s, %s, NOW()
+                        )
+                        ON CONFLICT (ticker, status) DO UPDATE SET
+                            name = EXCLUDED.name,
+                            thesis = EXCLUDED.thesis,
+                            confidence = EXCLUDED.confidence,
+                            entry_trigger = EXCLUDED.entry_trigger,
+                            priority = EXCLUDED.priority,
+                            current_price = EXCLUDED.current_price,
+                            is_current = TRUE,
+                            policy_version = EXCLUDED.policy_version,
+                            source_book_state_id =
+                                EXCLUDED.source_book_state_id,
+                            feature_checksum_sha256 =
+                                EXCLUDED.feature_checksum_sha256,
+                            evidence_at = EXCLUDED.evidence_at,
+                            updated_at = NOW()
+                    """, (
+                        opportunity["ticker"],
+                        opportunity["name"],
+                        opportunity["thesis"],
+                        opportunity["confidence"],
+                        opportunity["entry_trigger"],
+                        priority,
+                        opportunity["current_price"],
+                        opportunity["policy_version"],
+                        opportunity["book_state_id"],
+                        opportunity["feature_checksum_sha256"],
+                        opportunity["last_report_minute"],
+                    ))
+                else:
+                    self.db.execute("""
+                        INSERT INTO prospects (
+                            ticker, name, thesis, confidence,
+                            entry_trigger, priority, current_price, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (ticker, status) DO UPDATE SET
+                            thesis = EXCLUDED.thesis,
+                            confidence = EXCLUDED.confidence,
+                            entry_trigger = EXCLUDED.entry_trigger,
+                            current_price = EXCLUDED.current_price,
+                            updated_at = NOW()
+                    """, (
+                        opportunity["ticker"],
+                        opportunity["name"],
+                        opportunity["thesis"],
+                        opportunity["confidence"],
+                        opportunity["entry_trigger"],
+                        priority,
+                        opportunity["current_price"],
+                    ))
                 updated += 1
-            except Exception as e:
-                logger.error(f"Error updating prospect {opp['ticker']}: {e}")
-        
-        logger.info(f"📝 Updated {updated} prospects")
+            except Exception as exc:
+                logger.error(
+                    "Error updating prospect %s: %s",
+                    opportunity["ticker"],
+                    exc,
+                )
+
+        logger.info(
+            "prospects_refreshed mode=%s count=%d",
+            "pretrade" if pretrade_mode else "legacy",
+            updated,
+        )
         return updated
     
     def generate_morning_briefing(self) -> str:
         """Generate morning market briefing."""
-        macro = self.get_latest_macro()
+        macro = self.get_authorized_market_context()
         
         briefing = []
         briefing.append(f"📰 Morning Briefing - {datetime.now().strftime('%Y-%m-%d')}")
         briefing.append("=" * 50)
         
-        briefing.append("\n🌍 Makro:")
-        for symbol, info in MACRO_SYMBOLS.items():
-            if symbol in macro:
-                data = macro[symbol]
-                value = float(data.get('value', 0))
-                change = float(data.get('change_pct', 0) or 0)
-                arrow = '↑' if change >= 0 else '↓'
-                briefing.append(f"  {info['name']}: {value:.2f} {arrow}{abs(change):.1f}%")
+        briefing.append("\n🌍 Verifierad marknadsdata:")
+        if "OMXSGI" in macro:
+            data = macro["OMXSGI"]
+            value = float(data.get("current_level", 0))
+            change = float(data.get("change_pct", 0) or 0)
+            arrow = '↑' if change >= 0 else '↓'
+            briefing.append(
+                f"  OMXSGI: {value:.2f} {arrow}{abs(change):.1f}%"
+            )
+        else:
+            briefing.append("  OMXSGI-data ej tillgänglig.")
         
         briefing.append("\n🎯 Top Prospects:")
         opportunities = self.find_opportunities()[:5]
@@ -490,13 +650,10 @@ class MarketAnalyzer:
         
         for ticker in self._company_cache:
             try:
-                # Get last 60 days of price data
-                rows = self.db.query("""
-                    SELECT date, open, high, low, close, volume FROM prices
-                    WHERE ticker = :ticker
-                    ORDER BY date DESC
-                    LIMIT 60
-                """, {'ticker': ticker})
+                rows = self.db.get_authorized_daily_bars(
+                    ticker,
+                    limit=60,
+                )
                 
                 if len(rows) < 20:
                     continue

@@ -4,23 +4,28 @@ Telegram Notifier for Trading Agent
 Sends trade notifications, morning briefings, and alerts to Telegram.
 """
 
-import os
 import logging
+import html
 import requests
 from typing import Optional, Dict, Any, List
 
-logger = logging.getLogger(__name__)
+from ..runtime_secrets import read_runtime_secret
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")  # Jörgen's DM
+logger = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
     """Send trading notifications via Telegram."""
 
     def __init__(self):
-        self.bot_token = BOT_TOKEN
-        self.chat_id = CHAT_ID
+        self.bot_token = read_runtime_secret(
+            "TELEGRAM_BOT_TOKEN",
+            default="",
+        )
+        self.chat_id = read_runtime_secret(
+            "TELEGRAM_CHAT_ID",
+            default="",
+        )
         self.enabled = bool(self.bot_token and self.chat_id)
         if not self.enabled:
             logger.warning("⚠️ Telegram notifier disabled (missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)")
@@ -37,11 +42,14 @@ class TelegramNotifier:
                 "disable_web_page_preview": True,
             }, timeout=10)
             if resp.status_code != 200:
-                logger.error(f"Telegram send failed: {resp.text}")
+                logger.error(
+                    "Telegram send failed with HTTP status %s",
+                    resp.status_code,
+                )
                 return False
             return True
-        except Exception as e:
-            logger.error(f"Telegram send error: {e}")
+        except Exception:
+            logger.error("Telegram send failed with a transport error")
             return False
 
     # ------------------------------------------------------------------
@@ -142,3 +150,18 @@ class TelegramNotifier:
     def notify_error(self, error_msg: str):
         """Send error notification."""
         self._send(f"⚠️ <b>Trading Agent Error</b>\n\n{error_msg[:500]}")
+
+    def notify_operational_alert(self, event: Dict[str, Any]) -> bool:
+        """Deliver one bounded operational alert transition."""
+        code = html.escape(str(event.get("code", "UNKNOWN"))[:64])
+        severity = html.escape(str(event.get("severity", "PAGE"))[:10])
+        summary = html.escape(str(event.get("summary", ""))[:240])
+        runbook = html.escape(
+            str(event.get("runbook", "docs/operations.md"))[:200]
+        )
+        return self._send(
+            "🚨 <b>Trading Agent driftlarm</b>\n\n"
+            f"<b>{severity}</b> · {code}\n"
+            f"{summary}\n"
+            f"Runbook: <code>{runbook}</code>"
+        )

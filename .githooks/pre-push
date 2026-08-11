@@ -1,6 +1,23 @@
 #!/bin/sh
-echo "🔍 Pre-push: TypeScript check..."
-npx tsc --noEmit 2>/dev/null || echo "⚠️ No tsconfig (skipping)"
-echo "🔨 Pre-push: Build check..."
-npm run build || { echo "❌ Build failed — push blocked"; exit 1; }
-echo "✅ All checks passed — pushing"
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+dashboard_dir="$repo_root/dashboard"
+
+if [ ! -f "$dashboard_dir/package.json" ]; then
+  echo "Pre-push blocked: dashboard/package.json is missing"
+  exit 1
+fi
+
+cd "$dashboard_dir"
+
+echo "Pre-push: checking dashboard types"
+npx tsc --noEmit
+
+echo "Pre-push: running dashboard tests"
+npm test
+
+echo "Pre-push: building dashboard"
+npm run build
+
+echo "Pre-push: dashboard checks passed"

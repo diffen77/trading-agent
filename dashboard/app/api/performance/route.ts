@@ -1,31 +1,40 @@
 import { NextResponse } from 'next/server'
-import { Pool } from 'pg'
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+import {
+  databaseUnavailable,
+  getDatabasePool,
+} from '@/lib/server/database'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
+    const pool = getDatabasePool()
     const stats = await pool.query(`
       SELECT 
         COUNT(*) as total_trades,
-        COUNT(CASE WHEN action = 'BUY' THEN 1 END) as buys,
-        COUNT(CASE WHEN action = 'SELL' THEN 1 END) as sells,
-        COUNT(CASE WHEN pnl > 0 THEN 1 END) as winners,
-        COUNT(CASE WHEN pnl < 0 THEN 1 END) as losers,
-        COALESCE(AVG(CASE WHEN pnl > 0 THEN pnl END), 0) as avg_win,
-        COALESCE(AVG(CASE WHEN pnl < 0 THEN pnl END), 0) as avg_loss,
-        COALESCE(SUM(pnl), 0) as total_pnl,
-        COALESCE(MAX(pnl), 0) as best_trade,
-        COALESCE(MIN(pnl), 0) as worst_trade,
+        COUNT(*) FILTER (WHERE action = 'BUY') as buys,
+        COUNT(*) FILTER (WHERE action = 'SELL') as sells,
+        COUNT(*) FILTER (
+          WHERE action = 'SELL' AND pnl IS NOT NULL
+        ) as closed_sells,
+        COUNT(*) FILTER (WHERE action = 'SELL' AND pnl > 0) as winners,
+        COUNT(*) FILTER (WHERE action = 'SELL' AND pnl < 0) as losers,
+        COALESCE(AVG(pnl) FILTER (
+          WHERE action = 'SELL' AND pnl > 0
+        ), 0) as avg_win,
+        COALESCE(AVG(pnl) FILTER (
+          WHERE action = 'SELL' AND pnl < 0
+        ), 0) as avg_loss,
+        COALESCE(SUM(pnl) FILTER (WHERE action = 'SELL'), 0) as total_pnl,
+        COALESCE(MAX(pnl) FILTER (WHERE action = 'SELL'), 0) as best_trade,
+        COALESCE(MIN(pnl) FILTER (WHERE action = 'SELL'), 0) as worst_trade,
         COALESCE(AVG(confidence), 0) as avg_confidence
       FROM trades
-      WHERE closed_at IS NOT NULL OR pnl IS NOT NULL
     `)
 
     const row = stats.rows[0]
-    const totalClosed = parseInt(row.winners) + parseInt(row.losers)
+    const totalClosed = parseInt(row.closed_sells)
     const winRate = totalClosed > 0 ? (parseInt(row.winners) / totalClosed) * 100 : 0
 
     // Get open positions count
@@ -49,11 +58,6 @@ export async function GET() {
       open_positions: parseInt(openPos.rows[0]?.open_positions || 0),
     })
   } catch (error) {
-    console.error('Error fetching performance:', error)
-    return NextResponse.json({
-      total_trades: 0, buys: 0, sells: 0, winners: 0, losers: 0,
-      win_rate: 0, avg_win: 0, avg_loss: 0, total_pnl: 0,
-      best_trade: 0, worst_trade: 0, avg_confidence: 0, open_positions: 0,
-    })
+    return databaseUnavailable('fetch performance', error)
   }
 }

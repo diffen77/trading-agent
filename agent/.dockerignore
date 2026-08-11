@@ -1,0 +1,13 @@
+__pycache__
+*.py[cod]
+.pytest_cache
+.hypothesis
+.env*
+*.pem
+*.key
+known_hosts
+.ssh
+.git
+data
+requirements-test.txt
+tests

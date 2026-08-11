@@ -6,48 +6,116 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-agent:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: trading_test
+          POSTGRES_PASSWORD: trading_test
+          POSTGRES_DB: trading_agent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_test -d trading_agent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://trading_test:trading_test@127.0.0.1:5432/trading_agent_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           
       - name: Install dependencies
+        working-directory: agent
         run: |
-          cd agent
-          pip install -r requirements.txt
-          pip install pytest
-          
+          python -m pip install --upgrade "pip>=26.2,<27"
+          python -m pip install -r requirements-test.txt
+
+      - name: Verify Python dependency graph and syntax
+        working-directory: agent
+        run: |
+          python -m pip check
+          python -m compileall -q src tests
+          python -m pip_audit -r requirements-test.txt
+
+      - name: Apply database migrations
+        run: >-
+          docker run --rm --network host
+          -v "$GITHUB_WORKSPACE/db:/db:ro"
+          -e DATABASE_URL="$TEST_DATABASE_URL"
+          postgres:16-alpine
+          /bin/sh /db/migrate.sh
+
       - name: Run tests
-        run: |
-          cd agent
-          python -m pytest tests/ -v || echo "No tests yet"
+        working-directory: agent
+        run: python -m pytest tests/ -v
 
   test-dashboard:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: trading_test
+          POSTGRES_PASSWORD: trading_test
+          POSTGRES_DB: trading_agent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_test -d trading_agent_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://trading_test:trading_test@127.0.0.1:5432/trading_agent_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
           
       - name: Install dependencies
-        run: |
-          cd dashboard
-          npm install
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Audit production dependencies
+        working-directory: dashboard
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Apply database migrations
+        run: >-
+          docker run --rm --network host
+          -v "$GITHUB_WORKSPACE/db:/db:ro"
+          -e DATABASE_URL="$TEST_DATABASE_URL"
+          postgres:16-alpine
+          /bin/sh /db/migrate.sh
+
+      - name: Run dashboard tests
+        working-directory: dashboard
+        run: npm test
           
       - name: Build
-        run: |
-          cd dashboard
-          npm run build
+        working-directory: dashboard
+        run: npm run build
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test
-
-  # Deploy handled by Watchtower (auto-pulls new images from GHCR)
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          NEXT_TELEMETRY_DISABLED: '1'

@@ -1,45 +1,51 @@
 import { NextResponse } from 'next/server';
-import { Pool } from 'pg';
 
-const pool = new Pool({
-  host: process.env.DB_HOST || 'trading-agent-db',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'trading_agent',
-  user: process.env.DB_USER || 'trading',
-  password: process.env.DB_PASSWORD || 'trading_dev_123',
-});
+import {
+  databaseUnavailable,
+  getDatabasePool,
+} from '@/lib/server/database';
+import {
+  AUTHORIZED_MARKET_DATA_CTES,
+} from '@/lib/server/authorized-market-data.mjs';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
+    const pool = getDatabasePool();
     const result = await pool.query(`
+      WITH ${AUTHORIZED_MARKET_DATA_CTES}
       SELECT 
         p.id,
         p.ticker,
         p.name,
         p.thesis,
         p.target_price,
-        p.current_price,
+        quote.last_price as current_price,
         p.entry_trigger,
         p.confidence,
         p.status,
         p.priority,
+        p.policy_version,
+        p.source_book_state_id,
+        p.evidence_at,
         p.added_at,
         p.updated_at,
-        pr.close as latest_price,
-        pr.date as price_date
+        quote.last_price as latest_price,
+        quote.event_time as price_date,
+        quote.received_at as price_received_at,
+        quote.source as price_source
       FROM prospects p
-      LEFT JOIN LATERAL (
-        SELECT close, date FROM prices 
-        WHERE ticker = p.ticker 
-        ORDER BY date DESC LIMIT 1
-      ) pr ON true
+      LEFT JOIN companies company ON company.ticker = p.ticker
+      LEFT JOIN latest_authorized_quotes quote
+        ON quote.instrument_id = company.instrument_id
       WHERE p.status = 'watching'
+        AND p.is_current = TRUE
       ORDER BY p.priority ASC, p.confidence DESC
     `);
     
     return NextResponse.json(result.rows);
   } catch (error) {
-    console.error('Error fetching prospects:', error);
-    return NextResponse.json({ error: 'Failed to fetch prospects' }, { status: 500 });
+    return databaseUnavailable('fetch prospects', error);
   }
 }
