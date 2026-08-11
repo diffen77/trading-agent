@@ -79,8 +79,13 @@ en paper-ledger som inte är ren.
 Den kontinuerliga kandidatloopen är redan aktivt säkerhetsdelad:
 
 - utfall och kalibrering kan köras automatiskt dygnet runt;
-- en statistiskt godkänd utmanarpolicy skapas endast som `DRAFT`;
-- godkännande och aktivering kräver två uttryckliga operatörskommandon;
+- en utmanarpolicy aktiveras automatiskt i paper trading först när den har
+  klarat det tidsordnade framåttestet;
+- efter aktivering följs den mot moderpolicyn under minst tre fullständiga
+  handelssessioner och minst 100 märkta utfall per policy;
+- moderpolicyn återställs automatiskt som en ny, spårbar policyversion om den
+  slår den aktiva policyn med minst två baspunkter och minst hälften av dess
+  utfall är positiva;
 - den äldre textbaserade trade-reviewn skapar inga `learnings` innan styrd
   historisk marknadsdata har importerats.
 

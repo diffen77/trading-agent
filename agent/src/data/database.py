@@ -8459,6 +8459,329 @@ class Database:
                 "candidate_id": candidate["id"],
             })
 
+    def activate_candidate_policy_automatically(
+        self,
+        version: str,
+        *,
+        activated_at: datetime,
+    ) -> bool:
+        """Atomically review and activate one forward-gated challenger."""
+        if (
+            not isinstance(version, str)
+            or not re.fullmatch(
+                r"[a-z0-9][a-z0-9._-]{2,49}",
+                version,
+            )
+        ):
+            raise ValueError("candidate policy version has invalid format")
+        if (
+            not isinstance(activated_at, datetime)
+            or activated_at.tzinfo is None
+            or activated_at.utcoffset() is None
+        ):
+            raise ValueError("activated_at must be timezone-aware")
+        transition_at = activated_at.astimezone(timezone.utc)
+        actor = "continuous-learning-worker"
+        with self.Session.begin() as session:
+            session.execute(text("""
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended('candidate-policy-activation', 0)
+                )
+            """))
+            candidate = session.execute(text("""
+                SELECT
+                    policy.id,
+                    policy.status,
+                    policy.parent_version_id,
+                    calibration.status AS calibration_status,
+                    parent.status AS parent_status
+                FROM candidate_policy_versions policy
+                JOIN candidate_policy_calibration_runs calibration
+                  ON calibration.id = policy.calibration_run_id
+                JOIN candidate_policy_versions parent
+                  ON parent.id = policy.parent_version_id
+                WHERE policy.version = :version
+                FOR UPDATE OF policy, parent
+            """), {"version": version}).mappings().one_or_none()
+            if candidate is None:
+                raise ValueError(
+                    "forward-gated candidate policy is unavailable"
+                )
+            if candidate["status"] == "ACTIVE":
+                return False
+            if (
+                candidate["status"] not in ("DRAFT", "APPROVED")
+                or candidate["calibration_status"] != "CHALLENGER"
+                or candidate["parent_status"] != "ACTIVE"
+            ):
+                raise ValueError(
+                    "forward-gated candidate policy is unavailable"
+                )
+            session.execute(text("""
+                UPDATE candidate_policy_versions
+                SET
+                    status = 'RETIRED',
+                    retired_at = :transition_at,
+                    updated_at = :transition_at
+                WHERE id = :parent_id
+            """), {
+                "parent_id": candidate["parent_version_id"],
+                "transition_at": transition_at,
+            })
+            session.execute(text("""
+                UPDATE candidate_policy_versions
+                SET
+                    status = 'ACTIVE',
+                    reviewed_by = COALESCE(reviewed_by, :actor),
+                    reviewed_at = COALESCE(reviewed_at, :transition_at),
+                    activated_by = :actor,
+                    activated_at = :transition_at,
+                    updated_at = :transition_at
+                WHERE id = :candidate_id
+            """), {
+                "actor": actor,
+                "candidate_id": candidate["id"],
+                "transition_at": transition_at,
+            })
+        return True
+
+    def rollback_candidate_policy_automatically(
+        self,
+        *,
+        evaluated_at: datetime,
+    ) -> dict:
+        """Restore the parent config after bounded forward regression."""
+        from ..core.candidates import (
+            CandidatePolicy,
+            candidate_policy_hash,
+        )
+        from ..core.continuous_learning import (
+            evaluate_candidate_policy_rollback,
+        )
+
+        if (
+            not isinstance(evaluated_at, datetime)
+            or evaluated_at.tzinfo is None
+            or evaluated_at.utcoffset() is None
+        ):
+            raise ValueError("evaluated_at must be timezone-aware")
+        checked_at = evaluated_at.astimezone(timezone.utc)
+        actor = "continuous-learning-worker"
+        with self.Session.begin() as session:
+            session.execute(text("""
+                SELECT pg_advisory_xact_lock(
+                    hashtextextended('candidate-policy-activation', 0)
+                )
+            """))
+            active = session.execute(text("""
+                SELECT
+                    id,
+                    version,
+                    config,
+                    RTRIM(config_hash) AS config_hash,
+                    parent_version_id,
+                    activated_by,
+                    activated_at
+                FROM candidate_policy_versions
+                WHERE status = 'ACTIVE'
+                FOR UPDATE
+            """)).mappings().one_or_none()
+            if active is None:
+                raise RuntimeError("No active candidate policy exists")
+            if (
+                active["parent_version_id"] is None
+                or active["activated_by"] != actor
+                or active["version"].startswith("xsto-rollback-")
+            ):
+                return {
+                    "status": "WAITING",
+                    "reason_code": "AUTOMATED_CHILD_POLICY_UNAVAILABLE",
+                    "policy_version": active["version"],
+                }
+            parent = session.execute(text("""
+                SELECT
+                    id,
+                    version,
+                    config,
+                    RTRIM(config_hash) AS config_hash
+                FROM candidate_policy_versions
+                WHERE id = :parent_id
+                FOR SHARE
+            """), {
+                "parent_id": active["parent_version_id"],
+            }).mappings().one_or_none()
+            if parent is None:
+                raise RuntimeError("Active policy parent is unavailable")
+            active_policy = CandidatePolicy.from_mapping(
+                version=active["version"],
+                config=active["config"],
+            )
+            parent_policy = CandidatePolicy.from_mapping(
+                version=parent["version"],
+                config=parent["config"],
+            )
+            if (
+                candidate_policy_hash(active_policy)
+                != active["config_hash"]
+                or candidate_policy_hash(parent_policy)
+                != parent["config_hash"]
+            ):
+                raise RuntimeError("Candidate policy config hash mismatch")
+
+            coverage = session.execute(text("""
+                WITH expected AS (
+                    SELECT
+                        prediction.id,
+                        DATE_TRUNC('minute', prediction.observed_at)
+                            + INTERVAL '30 minutes' AS target_at
+                    FROM candidate_predictions prediction
+                    WHERE prediction.policy_version = :policy_version
+                      AND prediction.created_at >= :activated_at
+                      AND prediction.observed_at <= :evaluated_at
+                      AND prediction.expected_horizons_minutes @> ARRAY[30]
+                )
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE expected.target_at <= :evaluated_at
+                    )::INTEGER AS matured,
+                    COUNT(outcome.id)::INTEGER AS labelled
+                FROM expected
+                LEFT JOIN candidate_prediction_outcomes outcome
+                  ON outcome.prediction_id = expected.id
+                 AND outcome.horizon_minutes = 30
+                 AND outcome.evaluated_at <= :evaluated_at
+            """), {
+                "activated_at": active["activated_at"],
+                "evaluated_at": checked_at,
+                "policy_version": active["version"],
+            }).mappings().one()
+            metrics = session.execute(text("""
+                SELECT
+                    COUNT(DISTINCT market_session.session_date)::INTEGER
+                        AS completed_sessions,
+                    COUNT(*) FILTER (
+                        WHERE prediction.signal_score >= :active_threshold
+                    )::INTEGER AS active_outcomes,
+                    COUNT(*) FILTER (
+                        WHERE prediction.signal_score >= :parent_threshold
+                    )::INTEGER AS parent_outcomes,
+                    AVG(outcome.return_bps) FILTER (
+                        WHERE prediction.signal_score >= :active_threshold
+                    ) AS active_mean_bps,
+                    AVG(outcome.return_bps) FILTER (
+                        WHERE prediction.signal_score >= :parent_threshold
+                    ) AS parent_mean_bps,
+                    100.0 * AVG(
+                        CASE
+                            WHEN outcome.return_bps > 0 THEN 1.0
+                            ELSE 0.0
+                        END
+                    ) FILTER (
+                        WHERE prediction.signal_score >= :parent_threshold
+                    ) AS parent_positive_rate_pct
+                FROM candidate_predictions prediction
+                JOIN candidate_prediction_outcomes outcome
+                  ON outcome.prediction_id = prediction.id
+                 AND outcome.horizon_minutes = 30
+                JOIN market_sessions market_session
+                  ON market_session.mic = 'XSTO'
+                 AND market_session.status IN ('OPEN', 'HALF_DAY')
+                 AND prediction.observed_at >= market_session.opens_at
+                 AND prediction.observed_at < market_session.closes_at
+                 AND outcome.target_event_time < market_session.closes_at
+                WHERE prediction.policy_version = :policy_version
+                  AND prediction.created_at >= :activated_at
+                  AND prediction.reason_code != 'SPREAD_TOO_WIDE'
+                  AND prediction.observed_at <= :evaluated_at
+                  AND outcome.evaluated_at <= :evaluated_at
+            """), {
+                "activated_at": active["activated_at"],
+                "active_threshold": active_policy.min_signal_score,
+                "evaluated_at": checked_at,
+                "parent_threshold": parent_policy.min_signal_score,
+                "policy_version": active["version"],
+            }).mappings().one()
+            matured = int(coverage["matured"] or 0)
+            labelled = int(coverage["labelled"] or 0)
+            decision = evaluate_candidate_policy_rollback(
+                completed_sessions=int(metrics["completed_sessions"] or 0),
+                coverage_pct=(
+                    labelled / matured * 100 if matured else 0.0
+                ),
+                active_outcomes=int(metrics["active_outcomes"] or 0),
+                parent_outcomes=int(metrics["parent_outcomes"] or 0),
+                active_mean_bps=metrics["active_mean_bps"],
+                parent_mean_bps=metrics["parent_mean_bps"],
+                parent_positive_rate_pct=(
+                    metrics["parent_positive_rate_pct"]
+                ),
+            )
+            result = {
+                field.name: getattr(decision, field.name)
+                for field in fields(decision)
+            }
+            if decision.status != "ROLLBACK":
+                return {
+                    **result,
+                    "policy_version": active["version"],
+                }
+
+            rollback_version = f"xsto-rollback-{active['id']}"
+            session.execute(text("""
+                UPDATE candidate_policy_versions
+                SET
+                    status = 'RETIRED',
+                    retired_at = :evaluated_at,
+                    updated_at = :evaluated_at
+                WHERE id = :active_id
+            """), {
+                "active_id": active["id"],
+                "evaluated_at": checked_at,
+            })
+            session.execute(text("""
+                INSERT INTO candidate_policy_versions (
+                    version,
+                    status,
+                    config,
+                    config_hash,
+                    parent_version_id,
+                    proposed_by,
+                    reviewed_by,
+                    reviewed_at,
+                    activated_by,
+                    activated_at
+                )
+                VALUES (
+                    :version,
+                    'ACTIVE',
+                    CAST(:config AS JSONB),
+                    :config_hash,
+                    :parent_version_id,
+                    :actor,
+                    :actor,
+                    :evaluated_at,
+                    :actor,
+                    :evaluated_at
+                )
+            """), {
+                "actor": actor,
+                "config": json.dumps(
+                    parent_policy.to_config(),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                "config_hash": parent["config_hash"],
+                "evaluated_at": checked_at,
+                "parent_version_id": active["id"],
+                "version": rollback_version,
+            })
+            return {
+                **result,
+                "policy_version": rollback_version,
+            }
+
     def reject_candidate_policy_version(
         self,
         version: str,

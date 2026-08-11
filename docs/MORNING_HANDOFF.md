@@ -17,8 +17,8 @@ Det innebär:
 - schema 45 med starkare bindning mellan datavalidering och exakt
   referenssnapshot;
 - checksummebunden leveranskontroll för all historik som krävs före backtest;
-- verifierad separation mellan automatisk kalibrering och manuell
-  policyaktivering.
+- automatisk aktivering av framåttestade kandidatpolicyer i paper trading,
+  med automatisk återställning efter verifierad försämring.
 
 ## Beslut och externa åtgärder, i ordning
 

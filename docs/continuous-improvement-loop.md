@@ -16,8 +16,10 @@ The first useful loop is:
 3. record every candidate considered, including `HOLD` and `ABSTAIN`;
 4. label each prediction from later, independently persisted book evidence;
 5. report coverage and forward returns by action and score band;
-6. let the model propose observations, while strategy activation remains an
-   explicit operator action.
+6. activate only forward-gated candidate policies automatically in paper
+   trading and restore the parent configuration after bounded regression;
+7. let the model propose observations without granting it a code-writing or
+   real-money execution path.
 
 ## Non-goals and safety boundaries
 
@@ -154,6 +156,9 @@ interpretation that may support a separate strategy proposal.
 
 The legacy trade-review path therefore remains fail-closed until authorised
 historical bars and corporate actions have been imported. Candidate-policy
-calibration may create a `DRAFT` challenger automatically, but an operator must
-approve it and then activate it through two distinct actions. Neither step is
-performed by the learning worker.
+calibration may create a `DRAFT` challenger automatically. In paper trading,
+the learning worker activates it automatically only after the forward gate
+passes. It then compares the active threshold with its parent over at least
+three completed sessions and 100 labelled outcomes per policy. A clear
+regression restores the parent configuration as a new, auditable policy
+version. This does not authorise real-money trading.

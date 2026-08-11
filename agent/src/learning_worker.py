@@ -23,6 +23,8 @@ class LearningCycleResult:
     outcomes_labelled: int
     calibration_run_id: int | None
     calibration_status: str | None
+    policy_action: str | None
+    policy_version: str | None
     error_code: str | None
 
     def to_dict(self) -> dict:
@@ -53,6 +55,8 @@ def run_learning_cycle(
     run_key = _run_key(checked_at)
     outcomes_labelled = 0
     calibration = None
+    policy_action = None
+    policy_version = None
     error_code = None
     try:
         outcomes_labelled = (
@@ -76,6 +80,41 @@ def run_learning_cycle(
                 "continuous_learning_failed stage=policy_calibration"
             )
             error_code = "POLICY_CALIBRATION_FAILED"
+
+    if (
+        error_code is None
+        and calibration
+        and calibration.get("status") == "CHALLENGER"
+    ):
+        policy_version = calibration.get("challenger_policy_version")
+        try:
+            if not isinstance(policy_version, str) or not policy_version:
+                raise RuntimeError(
+                    "forward challenger is missing its policy version"
+                )
+            activated = database.activate_candidate_policy_automatically(
+                policy_version,
+                activated_at=checked_at,
+            )
+            policy_action = "ACTIVATED" if activated else "ALREADY_ACTIVE"
+        except Exception:
+            logger.exception(
+                "continuous_learning_failed stage=policy_activation"
+            )
+            error_code = "POLICY_ACTIVATION_FAILED"
+    elif error_code is None:
+        try:
+            rollback = database.rollback_candidate_policy_automatically(
+                evaluated_at=checked_at,
+            )
+            if rollback.get("status") == "ROLLBACK":
+                policy_action = "ROLLED_BACK"
+                policy_version = rollback.get("policy_version")
+        except Exception:
+            logger.exception(
+                "continuous_learning_failed stage=policy_rollback"
+            )
+            error_code = "POLICY_ROLLBACK_FAILED"
 
     status = "FAILED" if error_code else "SUCCEEDED"
     calibration_run_id = (
@@ -107,6 +146,8 @@ def run_learning_cycle(
             outcomes_labelled=outcomes_labelled,
             calibration_run_id=calibration_run_id,
             calibration_status=calibration_status,
+            policy_action=policy_action,
+            policy_version=policy_version,
             error_code="RUN_EVIDENCE_PERSISTENCE_FAILED",
         )
 
@@ -116,6 +157,8 @@ def run_learning_cycle(
         outcomes_labelled=outcomes_labelled,
         calibration_run_id=calibration_run_id,
         calibration_status=calibration_status,
+        policy_action=policy_action,
+        policy_version=policy_version,
         error_code=error_code,
     )
 
@@ -172,10 +215,13 @@ def main(
         )
         logger.info(
             "continuous_learning_cycle status=%s outcomes=%d "
-            "calibration_status=%s error_code=%s",
+            "calibration_status=%s policy_action=%s "
+            "policy_version=%s error_code=%s",
             result.status,
             result.outcomes_labelled,
             result.calibration_status,
+            result.policy_action,
+            result.policy_version,
             result.error_code,
         )
         sleeper(interval)
