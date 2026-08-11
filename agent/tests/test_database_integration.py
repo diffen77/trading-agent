@@ -5348,7 +5348,12 @@ def test_paper_fill_is_bound_to_the_executable_book_side(
                 source_book_state_id,
                 source_quote_id,
                 quote_price,
-                price
+                price,
+                fee_amount,
+                spread_cost,
+                slippage_cost,
+                net_cash_effect,
+                paper_execution_cost_policy_id
             FROM trades
             WHERE id = %s
             """,
@@ -5357,8 +5362,13 @@ def test_paper_fill_is_bound_to_the_executable_book_side(
         row = cursor.fetchone()
     assert row[0] == state_id
     assert row[1] is None
-    assert Decimal(row[2]) == Decimal("321.30000000")
-    assert Decimal(row[3]) == Decimal("321.30000000")
+    assert Decimal(row[2]) == Decimal("321.20000000")
+    assert Decimal(row[3]) == Decimal("321.46065000")
+    assert Decimal(row[4]) == Decimal("1.00")
+    assert Decimal(row[5]) == Decimal("0.10")
+    assert Decimal(row[6]) == Decimal("0.16")
+    assert Decimal(row[7]) == Decimal("322.46")
+    assert row[8] is not None
 
     with connection.cursor() as cursor:
         cursor.execute("DELETE FROM market_sessions")

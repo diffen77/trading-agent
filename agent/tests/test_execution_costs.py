@@ -9,6 +9,15 @@ from src.core.execution_costs import (
 )
 
 
+def test_swedish_retail_model_includes_fee_and_conservative_slippage():
+    model = ExecutionCostModel.swedish_retail()
+
+    assert model.fee_bps == Decimal("25")
+    assert model.spread_bps == Decimal("0")
+    assert model.slippage_bps == Decimal("5")
+    assert model.minimum_fee == Decimal("1")
+
+
 def test_buy_and_sell_apply_frozen_spread_slippage_and_fee_model():
     model = ExecutionCostModel(
         fee_bps=Decimal("5"),

@@ -127,6 +127,25 @@ def test_brain_describes_public_pretrade_breadth_without_requiring_index():
     assert "OMXSGI krävs inte" in context
 
 
+def test_deep_candidate_context_does_not_repeat_the_full_price_universe():
+    brain = TradingBrain.__new__(TradingBrain)
+    brain._get_portfolio_context = lambda: "portfolio"
+    brain._get_macro_context = lambda: "macro"
+    brain._get_news_context = lambda: "news"
+    brain._get_prospects_context = lambda: "prospects"
+    brain._get_reports_context = lambda: "reports"
+    brain._get_prices_context = lambda: (_ for _ in ()).throw(
+        AssertionError("candidate context must not duplicate all prices")
+    )
+
+    context = brain.build_context(
+        deep=True,
+        candidate_snapshot=[],
+    )
+
+    assert "ALLA PRISER" not in context
+
+
 def test_missing_macro_evidence_contributes_no_opportunity_points():
     analyzer = MarketAnalyzer(AnalyzerDatabase())
 

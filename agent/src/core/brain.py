@@ -652,7 +652,7 @@ class TradingBrain:
             ("PROSPECTS", self._get_prospects_context()),
             ("RAPPORTER (5 dagar)", self._get_reports_context()),
         ]
-        if deep:
+        if deep and candidate_snapshot is None:
             sections.append(("ALLA PRISER", self._get_prices_context()))
 
         parts = []

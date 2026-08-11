@@ -264,6 +264,10 @@ blockerade.
   slippagemodellen för exekveringspris, kassaflöde och netto-FIFO-P&L.
   Stängda positioner hämtas från ledgern och kritiska incidenter från
   en separat append-only incidentlogg.
+- Schema 48 binder vanliga orderboksbaserade paperfills till en separat
+  policy med faktisk spread, 5 baspunkters slippage och 0,25 procents
+  courtage med minst 1 SEK. Policyn är framåtriktad och påverkar inte
+  ett aktivt benchmarks frysta modell.
 - Varje benchmark-affär binds till ett exakt `market_quotes`-ID och
   stoppas vid fel aktie, provider eller pris, för gammal eller framtida
   offert samt exekvering utanför en öppen XSTO-session.

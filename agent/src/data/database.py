@@ -317,10 +317,10 @@ class Database:
             version = session.execute(
                 text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
             ).scalar_one()
-            if version < 47:
+            if version < 48:
                 raise RuntimeError(
                     f"Database schema is too old (version {version}); "
-                    "version 47 is required"
+                    "version 48 is required"
                 )
 
     def upsert_instruments(
@@ -9336,9 +9336,11 @@ class Database:
                         "source_book_state_id is required by the running "
                         "benchmark execution contract"
                     )
-            if (
-                benchmark is not None
-                and benchmark['execution_price_source']
+            if benchmark is None and source_book is not None:
+                cost_model = ExecutionCostModel.swedish_retail()
+            if source_book is not None and (
+                benchmark is None
+                or benchmark['execution_price_source']
                 == 'TOP_OF_BOOK_PLUS_SLIPPAGE'
             ):
                 execution = calculate_top_of_book_execution(
@@ -9565,6 +9567,27 @@ class Database:
                     None,
                 )
 
+            insert_trade = dict(normalized)
+            if source_book is not None:
+                raw_side_price = Decimal(
+                    source_book[
+                        'ask_price'
+                        if normalized['action'] == 'BUY'
+                        else 'bid_price'
+                    ]
+                ).quantize(Decimal('0.00000001'))
+                insert_trade.update({
+                    'quote_price': None,
+                    'price': raw_side_price,
+                    'total_value': (
+                        raw_side_price * normalized['shares']
+                    ).quantize(Decimal('0.01')),
+                    'fee_amount': None,
+                    'spread_cost': None,
+                    'slippage_cost': None,
+                    'net_cash_effect': None,
+                })
+
             result = session.execute(text("""
                 INSERT INTO trades (
                     ticker, action, shares, quote_price, price, total_value,
@@ -9592,7 +9615,7 @@ class Database:
                 )
                 RETURNING id, executed_at
             """), {
-                **normalized,
+                **insert_trade,
                 'entry_trade_id': entry_trade_id,
                 'pnl': realized_pnl,
                 'closes_position': closes_position,
