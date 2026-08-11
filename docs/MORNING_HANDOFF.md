@@ -4,8 +4,8 @@
 
 Allt säkert internt arbete som kunde göras utan köp, avtal, KYC, riktiga
 pengar eller operatörens finansiella beslut är mergat till `main`. CI och den
-immutabla releasebyggnaden är gröna. Staging kör schema 45 från den verifierade
-releasen `a1ca715380f3e496cddcfc7373205b84adbac4dd`.
+immutabla releasebyggnaden är gröna. Staging kör schema 48 från den verifierade
+releasen `8805c15250fd70be08080b6a140adc359d655ad6`.
 
 Det innebär:
 
@@ -18,26 +18,29 @@ Det innebär:
   referenssnapshot;
 - checksummebunden leveranskontroll för all historik som krävs före backtest;
 - automatisk aktivering av framåttestade kandidatpolicyer i paper trading,
-  med automatisk återställning efter verifierad försämring.
+  med automatisk återställning efter verifierad försämring;
+- 99,04 procents verifierad sektortäckning för det aktiva XSTO-universumet;
+- realistiska standardkostnader för nya paper-affärer;
+- plattformsägd automatisk stagingdeploy med isolerad dispatchnyckel i
+  GitHub och Bitwarden.
 
 ## Beslut och externa åtgärder, i ordning
 
 ### 1. GitHub- och releasekedjan — klart
 
-PR #10 mergades till `main` som `6be95b57f472c5393b01044d52562fb17d7372c5`.
-PR #11 uppgraderade release-actions. Den deployade staging-releasen är
-`a1ca715380f3e496cddcfc7373205b84adbac4dd`; agent- och dashboard-images samt
-release-manifestet byggdes från exakt denna revision.
+PR #20 och PR #21 mergades till `main`. Den deployade staging-releasen är
+`8805c15250fd70be08080b6a140adc359d655ad6`; agent- och dashboard-images samt
+release-manifestet byggdes från exakt denna revision. Plattformens PR #27
+mergades och deploykörning `31537091406` passerade.
 
-### 2. Första schema-45-releasens transition — klart
+### 2. Schema-48-transition och plattformsdeploy — klart
 
-En validerad PostgreSQL-dump samt snapshots av Compose-konfiguration och
-migrationsfiler togs före övergången. Schema 45 migrerades, samtliga långlivade
-tjänster startades från digest-låsta images och OCI-revisionen verifierades mot
-GitHub-releasen.
+Den befintliga ledgern och de namngivna volymerna bevarades. Schema 45
+migrerades framåt till schema 48, samtliga långlivade tjänster startades från
+digest-låsta images och OCI-revisionen verifierades mot GitHub-releasen.
 
-Efterkontrollen visar intern readiness `READY`, friska tjänster och korrekt
-operationsblockering `XSTO_SESSION_NOT_OPEN` utanför börsens öppettid.
+Efterkontrollen visar intern readiness `READY`, elva friska tjänster, inga
+öppna driftlarm och korrekt tradingblockering när XSTO-sessionen är stängd.
 
 ### 3. Skaffa den styrda historikleveransen
 
@@ -64,20 +67,17 @@ exakt 20 000 SEK, inga positioner och inga tidigare benchmarkaffärer.
 Rekommendation: separat isolerad benchmarkmiljö. Det bevarar nuvarande
 paperhistorik och ger renare evidens.
 
-### 5. Frys benchmarkantagandena
+### 5. Frys återstående benchmarkantaganden
 
-Beslut krävs för:
+Tekniska standardvärden för courtage, slippage och exekveringsprisregel finns
+nu i schema 48. Kvar att besluta när benchmarkstarten närmar sig är vald
+OMXSGI-källa, slutliga godkännandekriterier och incidentregler.
 
-- courtage/avgifter;
-- slippage;
-- exekveringsprisregel;
-- vald quote-provider och OMXSGI-provider;
-- godkännandekriterier och incidentregler.
+### 6. Frys modellbeviset inför benchmark
 
-### 6. Frys modellbeviset
-
-Beslut: välj exakt modellbackend/modellnamn och spara det verifierade bevis som
-förregistreringen ska binda. Modellbyte efter start får inte ske tyst.
+Staging kör Hermes med `gpt-5.6-sol` och endpointen är verifierat nåbar. Vid
+benchmarkstart ska det exakta modellbeviset bindas i förregistreringen;
+modellbyte efter start får inte ske tyst.
 
 ### 7. Godkänn experimentidentiteten
 
