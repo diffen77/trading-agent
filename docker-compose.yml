@@ -282,6 +282,25 @@ services:
         read_only: true
     restart: on-failure:5
 
+  sector-sync:
+    profiles: ["market-data"]
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      universe-sync:
+        condition: service_healthy
+    command: ["python", "-m", "src.sector_sync", "daemon"]
+    environment:
+      DATABASE_URL: postgresql://trading:${DB_PASSWORD:?DB_PASSWORD must be set}@db:5432/trading_agent
+      ENABLE_NASDAQ_SECTOR_SYNC: ${ENABLE_NASDAQ_SECTOR_SYNC:-true}
+      NASDAQ_SECTOR_MINIMUM_COVERAGE: ${NASDAQ_SECTOR_MINIMUM_COVERAGE:-0.95}
+      SECTOR_SYNC_INTERVAL_SECONDS: ${SECTOR_SYNC_INTERVAL_SECONDS:-86400}
+      PYTHONUNBUFFERED: 1
+    restart: unless-stopped
+
   dashboard:
     build:
       context: ./dashboard

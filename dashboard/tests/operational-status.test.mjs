@@ -10,7 +10,7 @@ import {
 function readySnapshot() {
   return {
     checked_at: '2026-07-29T10:00:00.000Z',
-    schema_version: 45,
+    schema_version: 46,
     strategy: {
       version: 'momentum-report-swing-v1',
       config_hash: 'a'.repeat(64),

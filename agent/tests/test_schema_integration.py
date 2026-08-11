@@ -117,6 +117,11 @@ REQUIRED_INSTRUMENT_COLUMNS = {
     "reference_snapshot_date",
 }
 
+REQUIRED_COMPANY_COLUMNS = {
+    "sector_source",
+    "sector_verified_at",
+}
+
 REQUIRED_REFERENCE_MEMBERSHIP_COLUMNS = {
     "cfi_code",
     "currency",
@@ -286,6 +291,15 @@ def test_runtime_schema_is_complete(connection):
             """
         )
         instrument_columns = {row[0] for row in cursor.fetchall()}
+
+        cursor.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'companies'
+            """
+        )
+        company_columns = {row[0] for row in cursor.fetchall()}
 
         cursor.execute(
             """
@@ -469,7 +483,8 @@ def test_runtime_schema_is_complete(connection):
         REQUIRED_PROVIDER_VALIDATION_COLUMNS
         <= provider_validation_columns
     )
-    assert schema_version == 45
+    assert schema_version == 46
+    assert REQUIRED_COMPANY_COLUMNS <= company_columns
     assert REQUIRED_AI_DECISION_COLUMNS <= ai_decision_columns
     assert REQUIRED_MARKET_BAR_COLUMNS <= market_bar_columns
     assert REQUIRED_MARKET_QUOTE_COLUMNS <= market_quote_columns

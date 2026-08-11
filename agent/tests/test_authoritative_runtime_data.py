@@ -141,6 +141,20 @@ def test_missing_macro_evidence_contributes_no_opportunity_points():
     assert score["macro"] == 0
 
 
+def test_nasdaq_sector_names_contribute_expected_opportunity_points():
+    analyzer = MarketAnalyzer(AnalyzerDatabase())
+
+    score = analyzer._calculate_opportunity_score(
+        "ISOFOL",
+        {"sector": "Health Care"},
+        {"net_sentiment": 0, "impacts": []},
+        {"change_pct": 0},
+        None,
+    )
+
+    assert score["sector"] == 17
+
+
 def test_analyzer_builds_prospects_from_multi_horizon_pretrade_evidence():
     from decimal import Decimal
 

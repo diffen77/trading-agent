@@ -54,6 +54,7 @@ from .nasdaq_reference import (
     NasdaqAliasSyncResult,
     NasdaqInstrumentAlias,
 )
+from .nasdaq_sector import SectorClassification
 from .top_of_book import (
     TopOfBookSnapshot,
     TopOfBookState,
@@ -1410,6 +1411,82 @@ class Database:
                     "XSTO company mapping is incomplete after ISIN fallback"
                 )
             return int(mapped_count)
+
+    def get_active_xsto_company_isins(self) -> tuple[str, ...]:
+        """Return stable identifiers for active mapped XSTO companies."""
+        with self.Session() as session:
+            rows = session.execute(text("""
+                SELECT instrument.isin
+                FROM companies company
+                JOIN instruments instrument
+                  ON instrument.id = company.instrument_id
+                WHERE instrument.mic = 'XSTO'
+                  AND instrument.status = 'ACTIVE'
+                ORDER BY instrument.isin
+            """)).mappings().all()
+        return tuple(row["isin"].strip().upper() for row in rows)
+
+    def update_company_sectors(
+        self,
+        classifications: Mapping[str, SectorClassification],
+        *,
+        source: str,
+        verified_at: datetime,
+    ) -> int:
+        """Apply exact-ISIN sectors without replacing curated classifications."""
+        if (
+            not isinstance(source, str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,99}", source)
+        ):
+            raise MarketDataError("sector source is invalid")
+        if (
+            not isinstance(verified_at, datetime)
+            or verified_at.tzinfo is None
+            or verified_at.utcoffset() is None
+        ):
+            raise MarketDataError("sector verified_at must be timezone-aware")
+        if not isinstance(classifications, Mapping) or not classifications:
+            raise MarketDataError("sector classifications are empty")
+        if len(classifications) > 2000:
+            raise MarketDataError("sector classifications are too large")
+
+        updated = 0
+        with self.Session.begin() as session:
+            for isin, classification in classifications.items():
+                if (
+                    not isinstance(classification, SectorClassification)
+                    or isin != classification.isin
+                    or not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", isin)
+                ):
+                    raise MarketDataError(
+                        "sector classification identity is invalid"
+                    )
+                result = session.execute(text("""
+                    UPDATE companies company
+                    SET
+                        sector = :sector,
+                        sector_source = :source,
+                        sector_verified_at = :verified_at,
+                        updated_at = NOW()
+                    FROM instruments instrument
+                    WHERE instrument.id = company.instrument_id
+                      AND instrument.isin = :isin
+                      AND instrument.mic = 'XSTO'
+                      AND instrument.status = 'ACTIVE'
+                      AND (
+                          company.sector IS NULL
+                          OR BTRIM(company.sector) = ''
+                          OR company.sector = 'Unclassified'
+                          OR company.sector_source = :source
+                      )
+                """), {
+                    "isin": isin,
+                    "sector": classification.sector,
+                    "source": source,
+                    "verified_at": verified_at,
+                })
+                updated += max(0, int(result.rowcount or 0))
+        return updated
 
     def ensure_public_pretrade_contract(
         self,

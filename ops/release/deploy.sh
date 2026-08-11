@@ -251,7 +251,7 @@ activate_release() {
     verify_image_provenance "$release" || return 1
     if profile_enabled market-data; then
         compose_release "$release" --profile market-data \
-            pull universe-sync market-sync || return 1
+            pull universe-sync market-sync sector-sync || return 1
     fi
     if profile_enabled nasdaq-reference; then
         compose_release "$release" --profile nasdaq-reference \
@@ -286,10 +286,10 @@ activate_release() {
     fi
     if profile_enabled market-data; then
         compose_release "$release" --profile market-data \
-            up -d universe-sync market-sync || return 1
+            up -d universe-sync market-sync sector-sync || return 1
     else
         compose_release "$release" --profile market-data \
-            stop market-sync || return 1
+            stop market-sync sector-sync || return 1
     fi
     if profile_enabled nasdaq-reference; then
         compose_release "$release" --profile nasdaq-reference \

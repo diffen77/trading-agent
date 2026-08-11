@@ -81,8 +81,8 @@ def _values():
         "dashboard_image": (
             "ghcr.io/diffen77/trading-agent/dashboard@sha256:" + "c" * 64
         ),
-        "schema_min": 45,
-        "schema_max": 45,
+        "schema_min": 46,
+        "schema_max": 46,
         "created_at": "2026-07-29T12:00:00Z",
     }
 
@@ -261,8 +261,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
     )
 
     assert manifest.release_sha == "a" * 40
-    assert manifest.schema_min == 45
-    assert manifest.schema_max == 45
+    assert manifest.schema_min == 46
+    assert manifest.schema_max == 46
     assert manifest.agent_image.endswith("b" * 64)
     assert manifest_path.read_text().splitlines() == [
         f"RELEASE_SHA={'a' * 40}",
@@ -274,8 +274,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
             "DASHBOARD_IMAGE=ghcr.io/diffen77/trading-agent/"
             f"dashboard@sha256:{'c' * 64}"
         ),
-        "SCHEMA_MIN=45",
-        "SCHEMA_MAX=45",
+        "SCHEMA_MIN=46",
+        "SCHEMA_MAX=46",
         "CREATED_AT=2026-07-29T12:00:00Z",
     ]
 
@@ -356,8 +356,8 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert "docker/setup-buildx-action@v4" in build
     assert "docker/login-action@v4" in build
     assert build.count("docker/build-push-action@v7") == 2
-    assert "--schema-min 45" in build
-    assert "--schema-max 45" in build
+    assert "--schema-min 46" in build
+    assert "--schema-max 46" in build
     assert "workflow_dispatch:" in deploy
     assert "environment: production" in deploy
     assert "concurrency:" in deploy
@@ -388,6 +388,21 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert 'profiles: ["object-storage"]' in compose
     assert "  nasdaq-alias-sync:" in compose
     assert 'profiles: ["nasdaq-reference"]' in compose
+    assert "  sector-sync:" in compose
+    sector_service = compose.split("  sector-sync:", 1)[1].split(
+        "\n  market-sync:",
+        1,
+    )[0]
+    assert 'profiles: ["market-data"]' in sector_service
+    assert (
+        'command: ["python", "-m", "src.sector_sync", "daemon"]'
+        in sector_service
+    )
+    assert "DATABASE_URL_FILE: /run/secrets/database_url" in sector_service
+    assert (
+        "ENABLE_NASDAQ_SECTOR_SYNC: "
+        "${ENABLE_NASDAQ_SECTOR_SYNC:-true}"
+    ) in sector_service
     assert "  monitor:" in local_compose
     assert "  learning-worker:" in local_compose
     assert "  knowledge-worker:" in local_compose
@@ -488,7 +503,7 @@ case "$*" in
       's#.*releases/\([0-9a-f]\{40\}\)/.*#\1#p' \
       > "$FAKE_ACTIVE_RELEASE_FILE"
     ;;
-  *" exec -T db psql "*) printf '45\n' ;;
+  *" exec -T db psql "*) printf '46\n' ;;
   *"image inspect "*"org.opencontainers.image.revision"*)
     if [ -n "$FAKE_IMAGE_REVISION" ]; then
       printf '%s\n' "$FAKE_IMAGE_REVISION"
@@ -594,7 +609,7 @@ def test_deploy_promotes_only_after_smoke_passes(tmp_path):
     assert "--profile market-data up" not in log
     assert "--profile nasdaq-reference pull" not in log
     assert "--profile nasdaq-reference up" not in log
-    assert "--profile market-data stop market-sync" in log
+    assert "--profile market-data stop market-sync sector-sync" in log
     assert "--profile nasdaq-reference stop nasdaq-alias-sync" in log
     assert (
         "--profile market-data --profile nasdaq-reference "
@@ -648,11 +663,11 @@ def test_deploy_activates_only_explicit_runtime_profiles(tmp_path):
 
     assert result.returncode == 0
     assert (
-        "--profile market-data pull universe-sync market-sync"
+        "--profile market-data pull universe-sync market-sync sector-sync"
         in log
     )
     assert (
-        "--profile market-data up -d universe-sync market-sync"
+        "--profile market-data up -d universe-sync market-sync sector-sync"
         in log
     )
     assert (

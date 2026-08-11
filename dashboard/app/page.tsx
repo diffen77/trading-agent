@@ -787,7 +787,9 @@ function PositionCard({ pos }: { pos: Position }) {
   const entry = parseFloat(String(pos.avg_price)) || 0
   const displayName = pos.company_name?.trim() || pos.ticker
   const identifierKind = /^[A-Z]{2}[A-Z0-9]{10}$/.test(pos.ticker) ? 'ISIN' : 'Ticker'
-  const sectorLabel = pos.sector === 'Unclassified' ? 'Ej klassificerad' : pos.sector
+  const sectorLabel = pos.sector && pos.sector !== 'Unclassified'
+    ? pos.sector
+    : ''
 
   // Progress between stop_loss and target
   const range = target - sl

@@ -36,7 +36,7 @@ test('standalone runtime binds to the container interface used by healthcheck', 
 test('healthcheck and operations share one required schema version', () => {
   assert.match(
     operationalStatus,
-    /export const REQUIRED_SCHEMA_VERSION = 45/,
+    /export const REQUIRED_SCHEMA_VERSION = 46/,
   )
   assert.match(healthRoute, /REQUIRED_SCHEMA_VERSION/)
   assert.doesNotMatch(healthRoute, /version !== \d+/)
@@ -65,4 +65,9 @@ test('analysis API resolves decision identifiers to company names', () => {
   assert.match(decisionsRoute, /reasoning_effort/)
   assert.match(dashboardPage, /Aktiv analysmodell/)
   assert.match(dashboardPage, /GPT-5\.6 Sol/)
+})
+
+test('position cards omit an unverified sector badge', () => {
+  assert.doesNotMatch(dashboardPage, /Ej klassificerad/)
+  assert.match(dashboardPage, /pos\.sector !== 'Unclassified'/)
 })
