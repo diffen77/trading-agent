@@ -352,7 +352,10 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert build.count("org.opencontainers.image.source=") == 2
     assert build.count("org.opencontainers.image.revision=") == 2
     assert "actions/attest@v4" in build
-    assert "actions/upload-artifact@v4" in build
+    assert "actions/upload-artifact@v7" in build
+    assert "docker/setup-buildx-action@v4" in build
+    assert "docker/login-action@v4" in build
+    assert build.count("docker/build-push-action@v7") == 2
     assert "--schema-min 45" in build
     assert "--schema-max 45" in build
     assert "workflow_dispatch:" in deploy

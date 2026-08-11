@@ -9,18 +9,15 @@ historiska journalen och ska inte användas som ensam källa för dagens drift.
 
 - Systemet är en fail-closed papertradingplattform. Riktiga pengar och
   brokerkoppling är blockerade.
-- Kanonisk arbetsbranch är `recovery/schema44-2026-08-10` i
-  `diffen77/trading-agent`; namnet är historiskt och branchen innehåller nu
-  schema 45.
-- Draft-PR är [#10](https://github.com/diffen77/trading-agent/pull/10).
-- `main` innehåller ännu inte recovery-arbetet och får därför inte användas
-  som aktuell kodkälla före granskad merge.
+- Kanonisk kod finns på `main` i `diffen77/trading-agent` efter merge av
+  [PR #10](https://github.com/diffen77/trading-agent/pull/10).
+- Mergecommit är `6be95b57f472c5393b01044d52562fb17d7372c5`.
 - PostgreSQL är system of record. Neo4j och Cortex är härledda projekt- och
   tradingminnen, inte ersättning för Git eller ledgern.
 
-## Verifierad lokal kod
+## Verifierad kod och release
 
-Följande ändringar finns som separata commits på recovery-branchen:
+Följande ändringar ingår nu i `main`:
 
 - `dd8edb7`: öppningsrutinens grace beräknas från leverantörens nominella
   fördröjning och tillåtna lagg; fallet 09:20:45 är regressionstestat;
@@ -34,8 +31,10 @@ Följande ändringar finns som separata commits på recovery-branchen:
 På ett nybyggt PostgreSQL 16-schema 45 passerade 664 agenttester och 65
 dashboardtester. Dashboardens produktionsbygge passerade. Den historiska
 leveranskontrollens fem fokustester passerade efter den fulla körningen.
-GitHub Actions ska fortfarande vara grön på slutcommit innan branchen kan
-betraktas som merge-klar.
+GitHub Actions-körning `31464024257` passerade på mergecommitten. Den
+immutabla releasekörningen `31464131315` byggde och pushade revisionsmärkta
+agent- och dashboard-images, attesterade deras proveniens och publicerade
+release-manifestet. Ingen deployment startades.
 
 ## Verifierad staging
 
