@@ -437,7 +437,7 @@ export default function Dashboard() {
               </div>
               <div className="mt-2 space-y-1 text-xs text-gray-400">
                 <div>Positioner: {ops.risk.open_positions}/{ops.risk.max_positions}</div>
-                <div>Största sektor: {ops.risk.largest_sector_positions}/{ops.risk.max_sector_positions}</div>
+                <div>Sektorkoncentration (info): {ops.risk.largest_sector_positions} positioner</div>
                 <div>Oprissatta positioner: {ops.risk.unpriced_positions}</div>
                 <div>Riskregler för nya köp: {ops.risk.entry_status === 'ACTIVE' && !ops.risk.daily_loss_breached ? 'öppna' : 'stoppade'}</div>
                 <div>Daglig gräns: −{fmtDec(ops.risk.max_daily_loss_pct, 2)}%</div>
@@ -846,7 +846,7 @@ function PositionCard({ pos }: { pos: Position }) {
 }
 
 function RSIBadge({ rsi }: { rsi: number }) {
-  const color = rsi > 70 ? 'bg-red-900/30 text-red-400' : rsi < 30 ? 'bg-green-900/30 text-green-400' : 'bg-gray-800 text-gray-500'
+  const color = rsi > 70 ? 'bg-red-900/30 text-red-400' : rsi < 30 ? 'bg-green-900/30 text-green-400' : 'bg-gray-800 text-white/90'
   const label = rsi > 70 ? 'Överköpt' : rsi < 30 ? 'Översåld' : 'RSI'
   return <span className={`px-1.5 py-0.5 rounded ${color}`}>{label} {fmtDec(rsi, 0)}</span>
 }
@@ -869,7 +869,7 @@ function DecisionCard({ decision }: { decision: Decision }) {
 
   const outlook = parsed.market_outlook || 'neutral'
   const decs = parsed.decisions || []
-  const outlookColor = outlook === 'bullish' ? 'bg-green-900/30 text-green-400' : outlook === 'bearish' ? 'bg-red-900/30 text-red-400' : 'bg-gray-800 text-gray-400'
+  const outlookColor = outlook === 'bullish' ? 'bg-green-900/30 text-green-400' : outlook === 'bearish' ? 'bg-red-900/30 text-red-400' : 'bg-gray-800 text-white/90'
   const time = new Date(decision.timestamp).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
   const date = new Date(decision.timestamp).toLocaleDateString('sv-SE')
 

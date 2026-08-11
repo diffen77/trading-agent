@@ -28,6 +28,11 @@ test('dashboard fetches and renders operational readiness evidence', () => {
   assert.match(page, /ops\.monitoring\.scheduled_routines/)
   assert.match(page, /Aktiva driftlarm/)
   assert.match(page, /Senaste schemakörningar/)
+  assert.match(page, /Sektorkoncentration \(info\)/)
+  assert.doesNotMatch(
+    page,
+    /largest_sector_positions\}\/\{ops\.risk\.max_sector_positions/,
+  )
   assert.match(page, /operations\.activation_actions/)
   assert.match(page, /<ActivationQueue/)
   assert.match(activationQueue, /Aktiveringskö/)

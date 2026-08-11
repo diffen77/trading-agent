@@ -933,12 +933,6 @@ export function buildOperationalStatus(snapshot) {
   if (maxPositions > 0 && openPositions > maxPositions) {
     blockers.push('POSITION_LIMIT_BREACH')
   }
-  if (
-    maxSectorPositions > 0
-    && largestSectorPositions > maxSectorPositions
-  ) {
-    blockers.push('SECTOR_LIMIT_BREACH')
-  }
   if (unpricedPositions > 0) {
     blockers.push('UNPRICED_POSITION')
   }
@@ -961,6 +955,7 @@ export function buildOperationalStatus(snapshot) {
       alert.severity === 'PAGE'
       && typeof code === 'string'
       && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)
+      && code !== 'SECTOR_LIMIT_BREACH'
       && !blockers.includes(code)
     ) {
       blockers.push(code)
@@ -979,7 +974,6 @@ export function buildOperationalStatus(snapshot) {
   )
   const riskHasBreach = blockers.some(code => (
     code === 'POSITION_LIMIT_BREACH'
-    || code === 'SECTOR_LIMIT_BREACH'
     || code === 'UNPRICED_POSITION'
     || code === 'TRADING_HALTED'
     || code === 'DAILY_LOSS_LIMIT_BREACHED'
