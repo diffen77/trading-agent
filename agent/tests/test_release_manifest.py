@@ -116,6 +116,23 @@ def test_agent_runtime_image_excludes_test_only_dependencies_and_state():
     assert "python -m pip_audit -r requirements-test.txt" in ci
 
 
+def test_docs_only_main_pushes_do_not_trigger_runtime_release():
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    push_trigger = ci.split("  push:\n", 1)[1].split(
+        "  pull_request:\n",
+        1,
+    )[0]
+
+    assert "    paths:\n" in push_trigger
+    assert "      - 'agent/**'\n" in push_trigger
+    assert "      - 'dashboard/**'\n" in push_trigger
+    assert "      - 'db/**'\n" in push_trigger
+    assert "      - 'ops/**'\n" in push_trigger
+    assert "      - '.github/workflows/**'\n" in push_trigger
+    assert "      - '.dockerignore'\n" in push_trigger
+    assert "      - 'docker-compose.yml'\n" in push_trigger
+
+
 def test_nasdaq_reference_sync_is_isolated_and_fail_closed_in_compose():
     compose = (ROOT / "docker-compose.yml").read_text()
 

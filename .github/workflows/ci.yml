@@ -3,6 +3,14 @@ name: CI/CD
 on:
   push:
     branches: [main]
+    paths:
+      - 'agent/**'
+      - 'dashboard/**'
+      - 'db/**'
+      - 'ops/**'
+      - '.github/workflows/**'
+      - '.dockerignore'
+      - 'docker-compose.yml'
   pull_request:
     branches: [main]
 
