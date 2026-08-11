@@ -3,8 +3,8 @@
 ## Resultat
 
 Allt säkert internt arbete som kunde göras utan köp, avtal, KYC, riktiga
-pengar, merge till `main` eller operatörens finansiella beslut är genomfört på
-draft-PR #10.
+pengar eller operatörens finansiella beslut är mergat till `main`. CI och den
+immutabla releasebyggnaden är gröna; ingen deployment har gjorts.
 
 Det innebär:
 
@@ -21,10 +21,11 @@ Det innebär:
 
 ## Beslut och externa åtgärder, i ordning
 
-### 1. Granska PR #10
+### 1. PR #10 — klart
 
-Beslut: godkänn eller begär ändringar. Merge till `main` är medvetet inte
-gjord automatiskt.
+PR #10 mergades till `main` som `6be95b57f472c5393b01044d52562fb17d7372c5`.
+Agent- och dashboard-images samt release-manifest byggdes från exakt denna
+revision.
 
 ### 2. Godkänn första schema-45-releasens transition
 
