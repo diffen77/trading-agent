@@ -317,10 +317,10 @@ class Database:
             version = session.execute(
                 text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
             ).scalar_one()
-            if version < 45:
+            if version < 47:
                 raise RuntimeError(
                     f"Database schema is too old (version {version}); "
-                    "version 45 is required"
+                    "version 47 is required"
                 )
 
     def upsert_instruments(
@@ -6757,7 +6757,7 @@ class Database:
                     SELECT
                         prediction.id AS prediction_id,
                         DATE_TRUNC('minute', prediction.observed_at)
-                            AS entry_event_time,
+                            AS requested_entry_event_time,
                         prediction_state.instrument_id,
                         prediction_batch.provider_contract_id
                     FROM candidate_predictions prediction
@@ -6775,26 +6775,42 @@ class Database:
                 evidence AS (
                     SELECT
                         due.*,
-                        state.id AS entry_state_id,
-                        (state.bid_price + state.ask_price) / 2
-                            AS entry_price
+                        candidate.entry_event_time,
+                        candidate.entry_state_id,
+                        candidate.entry_price
                     FROM due
-                    JOIN pre_trade_batches batch
-                      ON batch.provider_contract_id =
-                            due.provider_contract_id
-                     AND batch.report_minute = due.entry_event_time
-                    JOIN pre_trade_stream_cursors seal
-                      ON seal.batch_id = batch.id
-                    JOIN pre_trade_book_states state
-                      ON state.batch_id = batch.id
-                     AND state.instrument_id = due.instrument_id
-                    WHERE state.bid_price IS NOT NULL
-                      AND state.ask_price IS NOT NULL
-                      AND state.bid_quantity > 0
-                      AND state.ask_quantity > 0
-                      AND state.trading_system = 'CLOB'
-                      AND state.trading_phase = 'COTR'
-                      AND state.received_at <= :evaluated_at
+                    JOIN LATERAL (
+                        SELECT
+                            batch.report_minute AS entry_event_time,
+                            state.id AS entry_state_id,
+                            (state.bid_price + state.ask_price) / 2
+                                AS entry_price
+                        FROM pre_trade_batches batch
+                        JOIN pre_trade_stream_cursors seal
+                          ON seal.batch_id = batch.id
+                        JOIN pre_trade_book_states state
+                          ON state.batch_id = batch.id
+                         AND state.instrument_id = due.instrument_id
+                        WHERE batch.provider_contract_id =
+                                due.provider_contract_id
+                          AND batch.report_minute >=
+                                due.requested_entry_event_time
+                          AND batch.report_minute <=
+                                due.requested_entry_event_time
+                                + INTERVAL '2 minutes'
+                          AND state.bid_price IS NOT NULL
+                          AND state.ask_price IS NOT NULL
+                          AND state.bid_quantity > 0
+                          AND state.ask_quantity > 0
+                          AND state.trading_system = 'CLOB'
+                          AND state.trading_phase = 'COTR'
+                          AND state.received_at <= :evaluated_at
+                        ORDER BY
+                            batch.report_minute,
+                            batch.id,
+                            state.id
+                        LIMIT 1
+                    ) candidate ON TRUE
                 )
                 INSERT INTO candidate_prediction_entries (
                     prediction_id,
@@ -6850,26 +6866,42 @@ class Database:
                 evidence AS (
                     SELECT
                         due.*,
-                        state.id AS outcome_state_id,
-                        (state.bid_price + state.ask_price) / 2
-                            AS observed_price
+                        candidate.actual_target_event_time,
+                        candidate.outcome_state_id,
+                        candidate.observed_price
                     FROM due
-                    JOIN pre_trade_batches batch
-                      ON batch.provider_contract_id =
-                            due.provider_contract_id
-                     AND batch.report_minute = due.target_event_time
-                    JOIN pre_trade_stream_cursors seal
-                      ON seal.batch_id = batch.id
-                    JOIN pre_trade_book_states state
-                      ON state.batch_id = batch.id
-                     AND state.instrument_id = due.instrument_id
-                    WHERE state.bid_price IS NOT NULL
-                      AND state.ask_price IS NOT NULL
-                      AND state.bid_quantity > 0
-                      AND state.ask_quantity > 0
-                      AND state.trading_system = 'CLOB'
-                      AND state.trading_phase = 'COTR'
-                      AND state.received_at <= :evaluated_at
+                    JOIN LATERAL (
+                        SELECT
+                            batch.report_minute
+                                AS actual_target_event_time,
+                            state.id AS outcome_state_id,
+                            (state.bid_price + state.ask_price) / 2
+                                AS observed_price
+                        FROM pre_trade_batches batch
+                        JOIN pre_trade_stream_cursors seal
+                          ON seal.batch_id = batch.id
+                        JOIN pre_trade_book_states state
+                          ON state.batch_id = batch.id
+                         AND state.instrument_id = due.instrument_id
+                        WHERE batch.provider_contract_id =
+                                due.provider_contract_id
+                          AND batch.report_minute >= due.target_event_time
+                          AND batch.report_minute <=
+                                due.target_event_time
+                                + INTERVAL '2 minutes'
+                          AND state.bid_price IS NOT NULL
+                          AND state.ask_price IS NOT NULL
+                          AND state.bid_quantity > 0
+                          AND state.ask_quantity > 0
+                          AND state.trading_system = 'CLOB'
+                          AND state.trading_phase = 'COTR'
+                          AND state.received_at <= :evaluated_at
+                        ORDER BY
+                            batch.report_minute,
+                            batch.id,
+                            state.id
+                        LIMIT 1
+                    ) candidate ON TRUE
                 ),
                 inserted AS (
                     INSERT INTO candidate_prediction_outcomes (
@@ -6886,7 +6918,7 @@ class Database:
                         evidence.prediction_id,
                         evidence.entry_id,
                         evidence.horizon,
-                        evidence.target_event_time,
+                        evidence.actual_target_event_time,
                         :evaluated_at,
                         evidence.outcome_state_id,
                         evidence.observed_price,

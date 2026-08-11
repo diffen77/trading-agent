@@ -36,7 +36,7 @@ test('standalone runtime binds to the container interface used by healthcheck', 
 test('healthcheck and operations share one required schema version', () => {
   assert.match(
     operationalStatus,
-    /export const REQUIRED_SCHEMA_VERSION = 46/,
+    /export const REQUIRED_SCHEMA_VERSION = 47/,
   )
   assert.match(healthRoute, /REQUIRED_SCHEMA_VERSION/)
   assert.doesNotMatch(healthRoute, /version !== \d+/)

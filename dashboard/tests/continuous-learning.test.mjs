@@ -79,7 +79,7 @@ test('learning API uses append-only prediction and outcome journals', () => {
 
 
 test(
-  'continuous learning query executes against schema 46',
+  'continuous learning query executes against schema 47',
   { skip: !process.env.TEST_DATABASE_URL },
   async () => {
     const marker = 'getDatabasePool().query(`'

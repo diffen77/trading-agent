@@ -106,6 +106,7 @@ def _pretrade_batch(
     bid_price: str = "321.10",
     ask_quantity: str = "800",
     empty_xsto: bool = False,
+    trading_phase: str = "COTR",
 ):
     reference = reference or _pretrade_reference()
     received_at = received_at or report_minute + timedelta(minutes=15)
@@ -126,11 +127,11 @@ def _pretrade_batch(
         rows = [
             (
                 f"{event_time};SE0000115446;BUY;;{bid_price};SEK;1;"
-                f"1000;SEK;4;XSTO;CLOB;COTR;{event_time}"
+                f"1000;SEK;4;XSTO;CLOB;{trading_phase};{event_time}"
             ),
             (
                 f"{ask_time};SE0000115446;SELL;;321.30;SEK;1;"
-                f"{ask_quantity};SEK;3;XSTO;CLOB;COTR;{ask_time}"
+                f"{ask_quantity};SEK;3;XSTO;CLOB;{trading_phase};{ask_time}"
             ),
         ]
     content = (
@@ -5562,13 +5563,14 @@ def test_continuous_candidate_journal_labels_forward_outcomes(
     assert first_ids == replayed_ids
     assert len(first_ids) == 1
 
-    for index in range(61, 106):
+    for index in range(61, 108):
         report_minute = first_report_minute + timedelta(minutes=index)
         bid_price = Decimal("320.00") + Decimal("0.01") * index
         batch = _pretrade_batch(
             report_minute=report_minute,
             received_at=report_minute + timedelta(minutes=15),
             bid_price=f"{bid_price:.2f}",
+            trading_phase="HALT" if index in {75, 106} else "COTR",
         )
         snapshot = apply_top_of_book_batch(
             previous=previous,
@@ -5584,7 +5586,7 @@ def test_continuous_candidate_journal_labels_forward_outcomes(
 
     evaluated_at = (
         first_report_minute
-        + timedelta(minutes=105)
+        + timedelta(minutes=107)
         + timedelta(minutes=15, seconds=10)
     )
     inserted = db.record_candidate_prediction_outcomes(
@@ -5660,9 +5662,9 @@ def test_continuous_candidate_journal_labels_forward_outcomes(
             (first_ids[0],),
         )
         entry_event_time, entry_price, target_event_time = cursor.fetchone()
-        assert entry_event_time == first_report_minute + timedelta(minutes=75)
-        assert entry_price == Decimal("321.025")
-        assert target_event_time == first_report_minute + timedelta(minutes=105)
+        assert entry_event_time == first_report_minute + timedelta(minutes=76)
+        assert entry_price == Decimal("321.03000000")
+        assert target_event_time == first_report_minute + timedelta(minutes=107)
 
         with pytest.raises(
             psycopg2.errors.RaiseException,

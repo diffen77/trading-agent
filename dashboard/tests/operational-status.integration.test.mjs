@@ -18,7 +18,7 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
 
 
 test(
-  'operational status query fails closed against schema 46',
+  'operational status query fails closed against schema 47',
   { skip: !TEST_DATABASE_URL },
   async () => {
     const pool = new pg.Pool({
@@ -47,7 +47,7 @@ test(
 
 
 test(
-  'authorized dashboard quote view executes against schema 46',
+  'authorized dashboard quote view executes against schema 47',
   { skip: !TEST_DATABASE_URL },
   async () => {
     const pool = new pg.Pool({

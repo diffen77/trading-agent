@@ -81,8 +81,8 @@ def _values():
         "dashboard_image": (
             "ghcr.io/diffen77/trading-agent/dashboard@sha256:" + "c" * 64
         ),
-        "schema_min": 46,
-        "schema_max": 46,
+        "schema_min": 47,
+        "schema_max": 47,
         "created_at": "2026-07-29T12:00:00Z",
     }
 
@@ -261,8 +261,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
     )
 
     assert manifest.release_sha == "a" * 40
-    assert manifest.schema_min == 46
-    assert manifest.schema_max == 46
+    assert manifest.schema_min == 47
+    assert manifest.schema_max == 47
     assert manifest.agent_image.endswith("b" * 64)
     assert manifest_path.read_text().splitlines() == [
         f"RELEASE_SHA={'a' * 40}",
@@ -274,8 +274,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
             "DASHBOARD_IMAGE=ghcr.io/diffen77/trading-agent/"
             f"dashboard@sha256:{'c' * 64}"
         ),
-        "SCHEMA_MIN=46",
-        "SCHEMA_MAX=46",
+        "SCHEMA_MIN=47",
+        "SCHEMA_MAX=47",
         "CREATED_AT=2026-07-29T12:00:00Z",
     ]
 
@@ -356,8 +356,8 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert "docker/setup-buildx-action@v4" in build
     assert "docker/login-action@v4" in build
     assert build.count("docker/build-push-action@v7") == 2
-    assert "--schema-min 46" in build
-    assert "--schema-max 46" in build
+    assert "--schema-min 47" in build
+    assert "--schema-max 47" in build
     assert "workflow_dispatch:" in deploy
     assert "environment: production" in deploy
     assert "concurrency:" in deploy
@@ -503,7 +503,7 @@ case "$*" in
       's#.*releases/\([0-9a-f]\{40\}\)/.*#\1#p' \
       > "$FAKE_ACTIVE_RELEASE_FILE"
     ;;
-  *" exec -T db psql "*) printf '46\n' ;;
+  *" exec -T db psql "*) printf '47\n' ;;
   *"image inspect "*"org.opencontainers.image.revision"*)
     if [ -n "$FAKE_IMAGE_REVISION" ]; then
       printf '%s\n' "$FAKE_IMAGE_REVISION"
