@@ -10,8 +10,11 @@ historiska journalen och ska inte användas som ensam källa för dagens drift.
 - Systemet är en fail-closed papertradingplattform. Riktiga pengar och
   brokerkoppling är blockerade.
 - Kanonisk kod finns på `main` i `diffen77/trading-agent` efter merge av
-  [PR #10](https://github.com/diffen77/trading-agent/pull/10).
-- Mergecommit är `6be95b57f472c5393b01044d52562fb17d7372c5`.
+  [PR #10](https://github.com/diffen77/trading-agent/pull/10) och den
+  efterföljande Actions-uppgraderingen i
+  [PR #11](https://github.com/diffen77/trading-agent/pull/11).
+- Aktuellt main-head och staging-release är
+  `a1ca715380f3e496cddcfc7373205b84adbac4dd`.
 - PostgreSQL är system of record. Neo4j och Cortex är härledda projekt- och
   tradingminnen, inte ersättning för Git eller ledgern.
 
@@ -31,10 +34,10 @@ Följande ändringar ingår nu i `main`:
 På ett nybyggt PostgreSQL 16-schema 45 passerade 664 agenttester och 65
 dashboardtester. Dashboardens produktionsbygge passerade. Den historiska
 leveranskontrollens fem fokustester passerade efter den fulla körningen.
-GitHub Actions-körning `31464024257` passerade på mergecommitten. Den
-immutabla releasekörningen `31464131315` byggde och pushade revisionsmärkta
+GitHub Actions-körning `31464520362` passerade på aktuellt main-head. Den
+immutabla releasekörningen `31464638182` byggde och pushade revisionsmärkta
 agent- och dashboard-images, attesterade deras proveniens och publicerade
-release-manifestet. Ingen deployment startades.
+release-manifestet utan Node 20-varningar.
 
 ## Verifierad staging
 
@@ -46,14 +49,25 @@ Senaste läsverifieringen visade:
 - publik root: `401`;
 - publik health: `200`;
 - operations-API utan auth: `401`;
-- tio Compose-tjänster: `running` och `healthy`;
+- tio långlivade Compose-tjänster: `running` och `healthy`;
 - intern readiness: `READY`;
-- databasschema: 44.
+- databasschema: 45;
+- agent-image:
+  `sha256:dd8b03dd14bc634daf48f52e0e53370c52b0f3457ee3409f8f15f968a4847d1f`;
+- dashboard-image:
+  `sha256:ca095e1e1436c2543df229be3454973b2506d90fad0e8c7b04a1880344bfe8c7`;
+- båda images har OCI-revision
+  `a1ca715380f3e496cddcfc7373205b84adbac4dd`.
 
-Staging har alltså inte nattens schema-45-kod. De nuvarande images saknar
-OCI-revisionslabel. En första schema-45-release får därför inte göras som en
-vanlig automatisk deploy: gammal schema-44-kod är inte en säker rollback efter
-migreringen, och de gamla images kan inte styrkas med den nya provenienskedjan.
+Före migrationen togs och validerades en PostgreSQL-dump samt separata
+snapshots av Compose-konfigurationen och migrationsfilerna. Smoke-testet efter
+deployment verifierade `200` på publik health, `401` utan auth och `200` med
+auth på operations-API:t. Operationsstatus var korrekt `BLOCKED` enbart av
+`XSTO_SESSION_NOT_OPEN` utanför börsens öppettid.
+
+Benchmark-readiness körs nu i staging och är fortsatt fail-closed. De
+kvarvarande blockerarna gäller extern data, ren benchmark-ledger och godkänd
+förregistrering; de är inte driftfel i releasen.
 
 ## Benchmark och lärandeloop
 

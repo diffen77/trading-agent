@@ -4,7 +4,8 @@
 
 Allt säkert internt arbete som kunde göras utan köp, avtal, KYC, riktiga
 pengar eller operatörens finansiella beslut är mergat till `main`. CI och den
-immutabla releasebyggnaden är gröna; ingen deployment har gjorts.
+immutabla releasebyggnaden är gröna. Staging kör schema 45 från den verifierade
+releasen `a1ca715380f3e496cddcfc7373205b84adbac4dd`.
 
 Det innebär:
 
@@ -21,20 +22,22 @@ Det innebär:
 
 ## Beslut och externa åtgärder, i ordning
 
-### 1. PR #10 — klart
+### 1. GitHub- och releasekedjan — klart
 
 PR #10 mergades till `main` som `6be95b57f472c5393b01044d52562fb17d7372c5`.
-Agent- och dashboard-images samt release-manifest byggdes från exakt denna
-revision.
+PR #11 uppgraderade release-actions och mergades som aktuellt main-head
+`a1ca715380f3e496cddcfc7373205b84adbac4dd`. De deployade agent- och
+dashboard-images samt release-manifestet byggdes från exakt denna revision.
 
-### 2. Godkänn första schema-45-releasens transition
+### 2. Första schema-45-releasens transition — klart
 
-Beslut: välj ett underhållsfönster och godkänn en engångsplan med
-databassnapshot, verifierad schema-45-deploy och framåtriktad backout.
+En validerad PostgreSQL-dump samt snapshots av Compose-konfiguration och
+migrationsfiler togs före övergången. Schema 45 migrerades, samtliga långlivade
+tjänster startades från digest-låsta images och OCI-revisionen verifierades mot
+GitHub-releasen.
 
-Skäl: staging kör schema 44 och images utan revisionslabel. Efter migrationen
-är automatisk rollback till den gamla koden inte säker. Ingen sådan deploy har
-gjorts under natten.
+Efterkontrollen visar intern readiness `READY`, friska tjänster och korrekt
+operationsblockering `XSTO_SESSION_NOT_OPEN` utanför börsens öppettid.
 
 ### 3. Skaffa den styrda historikleveransen
 
@@ -89,10 +92,6 @@ stängda affärer och godkänt benchmark utan kritiska incidenter.
 
 ## Körordning efter besluten
 
-1. Merge av granskad PR.
-2. Bygg och verifiera officiella revisionsmärkta images.
-3. Ta snapshot och genomför den godkända schema-45-transitionen.
-4. Kör staging-smoke och benchmark `readiness`.
-5. Skaffa och verifiera data; bygg och testa formatadaptern mot samplefiler.
-6. Skapa ren benchmarkmiljö och frys förregistreringen.
-7. Starta forward-benchmarket först när alla maskinella gates är gröna.
+1. Skaffa och verifiera data; bygg och testa formatadaptern mot samplefiler.
+2. Skapa ren benchmarkmiljö och frys förregistreringen.
+3. Starta forward-benchmarket först när alla maskinella gates är gröna.
