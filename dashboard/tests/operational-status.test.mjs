@@ -194,7 +194,7 @@ test('public delayed pre-trade needs executable books but no paid aliases or ind
 })
 
 
-test('risk breaches, unpriced positions and incidents remain visible', () => {
+test('hard risk breaches, unpriced positions and incidents remain visible', () => {
   const snapshot = readySnapshot()
   snapshot.risk = {
     ...snapshot.risk,
@@ -209,11 +209,37 @@ test('risk breaches, unpriced positions and incidents remain visible', () => {
   assert.equal(status.overall_status, 'BLOCKED')
   assert.deepEqual(status.blockers, [
     'POSITION_LIMIT_BREACH',
-    'SECTOR_LIMIT_BREACH',
     'UNPRICED_POSITION',
     'CRITICAL_BENCHMARK_INCIDENT',
   ])
   assert.equal(status.risk.status, 'BREACH')
+})
+
+
+test('sector concentration is visible without blocking paper trading', () => {
+  const snapshot = readySnapshot()
+  snapshot.risk.largest_sector_positions = 3
+  snapshot.operational_alerts = [{
+    alert_key: 'risk:sector',
+    code: 'SECTOR_LIMIT_BREACH',
+    severity: 'PAGE',
+    state: 'OPEN',
+    summary: 'Historisk sektorspärr passerad.',
+    runbook: 'docs/operations.md',
+    observed_at: '2026-08-11T12:01:00.000Z',
+  }]
+
+  const status = buildOperationalStatus(snapshot)
+
+  assert.equal(status.overall_status, 'READY')
+  assert.deepEqual(status.blockers, [])
+  assert.equal(status.risk.status, 'WITHIN_LIMITS')
+  assert.equal(status.risk.largest_sector_positions, 3)
+  assert.equal(status.risk.max_sector_positions, 2)
+  assert.deepEqual(
+    status.monitoring.active_alerts.map(alert => alert.code),
+    ['SECTOR_LIMIT_BREACH'],
+  )
 })
 
 
