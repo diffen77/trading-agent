@@ -100,11 +100,45 @@ def test_paper_trader_accepts_exact_pretrade_book_state():
     candidate = opportunity(
         source_quote_id=None,
         source_book_state_id=73,
+        executable_quantity=1_000,
     )
 
     assert trader.execute_trade(candidate) is True
     assert database.logged_trade["source_quote_id"] is None
     assert database.logged_trade["source_book_state_id"] == 73
+
+
+def test_paper_trader_caps_pretrade_buy_to_executable_quantity():
+    database = FakeDatabase()
+    trader = PaperTrader(database)
+
+    candidate = opportunity(
+        source_quote_id=None,
+        source_book_state_id=73,
+        executable_quantity=3,
+    )
+
+    assert trader.execute_trade(candidate) is True
+    assert database.logged_trade["shares"] == 3
+    assert database.logged_trade["total_value"] == 300
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    [None, 0, -1, 0.00001, float("inf")],
+)
+def test_paper_trader_rejects_invalid_pretrade_executable_quantity(quantity):
+    database = FakeDatabase()
+    trader = PaperTrader(database)
+
+    assert trader.execute_trade(
+        opportunity(
+            source_quote_id=None,
+            source_book_state_id=73,
+            executable_quantity=quantity,
+        )
+    ) is False
+    assert database.logged_trade is None
 
 
 def test_paper_trader_rejects_ambiguous_market_evidence():

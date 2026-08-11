@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 import src.core.brain as brain_module
@@ -682,6 +683,7 @@ def test_public_pretrade_buy_uses_book_side_and_intraday_warmup():
     validated = make_brain(db).validate_decisions(response(buy()))
 
     assert validated[0]["execution_price"] == 101
+    assert validated[0]["executable_quantity"] == 1000
     assert validated[0]["source_quote_id"] is None
     assert validated[0]["source_book_state_id"] == 73
 
@@ -1077,7 +1079,9 @@ def test_ai_execution_propagates_parent_decision_id_to_trade():
             "reason": "Momentum",
             "position_value": 2_000,
             "execution_price": 100,
-            "source_quote_id": 41,
+            "executable_quantity": 12.5,
+            "source_quote_id": None,
+            "source_book_state_id": 41,
         }],
         Trader(),
         cycle_key="brain:test-cycle",
@@ -1088,3 +1092,39 @@ def test_ai_execution_propagates_parent_decision_id_to_trade():
     assert len(executed) == 1
     assert captured[0]["decision_id"] == 73
     assert captured[0]["decision_origin"] == "AI_DECISION"
+    assert captured[0]["executable_quantity"] == 12.5
+
+
+def test_ai_sell_caps_fill_to_executable_book_quantity():
+    captured = []
+
+    class SellDatabase:
+        def get_portfolio(self):
+            return pd.DataFrame([{"ticker": "VOLV-B", "shares": 10}])
+
+        def log_trade_result(self, trade):
+            captured.append(trade)
+            return SimpleNamespace(trade_id=19, inserted=True)
+
+    brain = make_brain()
+    brain.db = SellDatabase()
+    executed = brain.execute_decisions(
+        [{
+            "action": "SELL",
+            "ticker": "VOLV-B",
+            "confidence": 90,
+            "reason": "Exit",
+            "execution_price": 100,
+            "executable_quantity": 3,
+            "source_quote_id": None,
+            "source_book_state_id": 81,
+        }],
+        object(),
+        cycle_key="brain:test-partial-sell",
+        strategy=baseline_strategy(),
+        decision_id=74,
+    )
+
+    assert len(executed) == 1
+    assert captured[0]["shares"] == 3
+    assert captured[0]["total_value"] == 300

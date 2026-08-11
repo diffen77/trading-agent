@@ -12,6 +12,7 @@ import logging
 import math
 import hashlib
 import os
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from time import sleep
 from typing import Dict, Any, List
 from datetime import datetime, timedelta, timezone
@@ -174,7 +175,67 @@ class PaperTrader:
                 )
                 return False
 
-        shares = position_size / current_price
+        try:
+            desired_notional = Decimal(str(position_size))
+            price_decimal = Decimal(str(current_price))
+        except (InvalidOperation, TypeError, ValueError):
+            logger.error(f"Invalid position size for {ticker}")
+            return False
+        if not desired_notional.is_finite() or desired_notional <= 0:
+            logger.error(f"Invalid position size for {ticker}")
+            return False
+        desired_shares = (desired_notional / price_decimal).quantize(
+            Decimal('0.0001'),
+            rounding=ROUND_DOWN,
+        )
+        if desired_shares <= 0:
+            logger.error(f"Position size is too small for {ticker}")
+            return False
+
+        shares_decimal = desired_shares
+        if source_book_state_id is not None:
+            try:
+                executable_quantity = Decimal(
+                    str(opportunity.get('executable_quantity'))
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                logger.error(
+                    f"Invalid executable book quantity for {ticker}"
+                )
+                return False
+            if (
+                not executable_quantity.is_finite()
+                or executable_quantity <= 0
+            ):
+                logger.error(
+                    f"Invalid executable book quantity for {ticker}"
+                )
+                return False
+            executable_quantity = executable_quantity.quantize(
+                Decimal('0.0001'),
+                rounding=ROUND_DOWN,
+            )
+            if executable_quantity <= 0:
+                logger.error(
+                    f"Executable book quantity is too small for {ticker}"
+                )
+                return False
+            shares_decimal = min(desired_shares, executable_quantity)
+            if shares_decimal < desired_shares:
+                logger.info(
+                    f"Partial BUY {ticker}: capped from "
+                    f"{desired_shares:.4f} to {shares_decimal:.4f} "
+                    "shares by executable book quantity"
+                )
+
+        shares = float(shares_decimal)
+        position_notional = (shares_decimal * price_decimal).quantize(
+            Decimal('0.01')
+        )
+        if position_notional <= 0:
+            logger.error(f"Executable notional is too small for {ticker}")
+            return False
+        position_size = float(position_notional)
         
         # Check we have enough cash for buys
         if action == 'BUY':
