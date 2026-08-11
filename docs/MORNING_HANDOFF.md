@@ -5,7 +5,7 @@
 Allt säkert internt arbete som kunde göras utan köp, avtal, KYC, riktiga
 pengar eller operatörens finansiella beslut är mergat till `main`. CI och den
 immutabla releasebyggnaden är gröna. Staging kör schema 48 från den verifierade
-releasen `8805c15250fd70be08080b6a140adc359d655ad6`.
+releasen `7bbf9f6971c14e0e317df1ea170a21345d58f805`.
 
 Det innebär:
 
@@ -28,10 +28,10 @@ Det innebär:
 
 ### 1. GitHub- och releasekedjan — klart
 
-PR #20 och PR #21 mergades till `main`. Den deployade staging-releasen är
-`8805c15250fd70be08080b6a140adc359d655ad6`; agent- och dashboard-images samt
-release-manifestet byggdes från exakt denna revision. Plattformens PR #27
-mergades och deploykörning `31537091406` passerade.
+PR #20, PR #21 och PR #23 mergades till `main`. Den deployade staging-releasen
+är `7bbf9f6971c14e0e317df1ea170a21345d58f805`; agent- och dashboard-images
+samt release-manifestet byggdes från exakt denna revision. Plattformens PR #27
+mergades och deploykörning `31538805321` passerade.
 
 ### 2. Schema-48-transition och plattformsdeploy — klart
 
