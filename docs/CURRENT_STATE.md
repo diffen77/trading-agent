@@ -13,7 +13,7 @@ historiska journalen och ska inte användas som ensam källa för dagens drift.
   [PR #10](https://github.com/diffen77/trading-agent/pull/10) och den
   efterföljande Actions-uppgraderingen i
   [PR #11](https://github.com/diffen77/trading-agent/pull/11).
-- Aktuellt main-head och staging-release är
+- Deployad staging-release är
   `a1ca715380f3e496cddcfc7373205b84adbac4dd`.
 - PostgreSQL är system of record. Neo4j och Cortex är härledda projekt- och
   tradingminnen, inte ersättning för Git eller ledgern.

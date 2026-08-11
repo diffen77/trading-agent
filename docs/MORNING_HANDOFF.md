@@ -25,9 +25,9 @@ Det innebär:
 ### 1. GitHub- och releasekedjan — klart
 
 PR #10 mergades till `main` som `6be95b57f472c5393b01044d52562fb17d7372c5`.
-PR #11 uppgraderade release-actions och mergades som aktuellt main-head
-`a1ca715380f3e496cddcfc7373205b84adbac4dd`. De deployade agent- och
-dashboard-images samt release-manifestet byggdes från exakt denna revision.
+PR #11 uppgraderade release-actions. Den deployade staging-releasen är
+`a1ca715380f3e496cddcfc7373205b84adbac4dd`; agent- och dashboard-images samt
+release-manifestet byggdes från exakt denna revision.
 
 ### 2. Första schema-45-releasens transition — klart
 
