@@ -169,13 +169,16 @@ benchmarkexperiment. `AUTOMATED_SCAN`, `MECHANICAL_EXIT`, `MANUAL` och
 3. Bilderna publiceras med commit-taggar och provenance-attestering.
 4. Ett immutabelt release-manifest fryser båda image-digestarna,
    commit-SHA och kompatibelt databasschemaintervall.
-5. Produktion kan endast startas manuellt från GitHub-miljön
-   `production`, där required reviewers ska vara aktiverade.
-6. Servern validerar manifestet som data, migrerar framåt, synkar
-   kalendern och startar exakt digest-pinnade bilder för agent,
-   dashboard, driftmonitor, universumsynk och marknadsdatasynk.
-7. Releasen markeras som aktuell först efter agent-readiness,
-   dashboard-health, verifierad `401` utan auth och `200` med auth.
+5. Plattformens poller på Kajen ser endast ett lyckat, CI-utlöst
+   `build-push.yml` på `main` med ett entydigt digestbevis för agentimagen.
+6. `diffen77/plattform-deploy` validerar repo, SHA, digest och en isolerad
+   appnyckel innan någonting byts.
+7. Migreringar och kalendersynk körs ur den nya agentimagen före byte.
+8. Alla långlivade agenttjänster och dashboarden byts till samma SHA och
+   verifieras mot de images som faktiskt hämtades.
+9. Releasen är godkänd först när `https://trader.lediff.online/api/health`
+   svarar med exakt `{"status":"ok"}`. Vid fel återställs samtliga utbytta
+   tjänster till de images som körde före försöket.
 
 Release-smoken använder vanlig `readiness`, eftersom en deploy måste
 kunna ske när börsen är stängd. Den innebär inte att handel är tillåten;
@@ -184,24 +187,28 @@ komplett, licensierad aktie- och OMXSGI-data.
 
 Det finns inga `latest`-taggar eller Watchtower i releasekedjan.
 
-## GitHub-konfiguration
+## GitHub- och Bitwarden-konfiguration för staging
 
-Skapa environment `production` med required reviewer och begränsa vilka
-brancher som får deploya. Lägg följande som environment secrets:
+Den aktiva stagingvägen ägs av `diffen77/plattform-deploy`. Apprepot har
+inga SSH-nycklar och ingen PAT. Plattformsrepot innehåller den versionerade
+stackdeklarationen, kör på runneretiketterna `self-hosted`, `kajen` och
+`staging`, och hämtar endast trading-agentens appspecifika dispatchnyckel ur
+Bitwarden-projektet Prod. Runtime-hemligheterna hämtas ur Bitwarden-projektet
+Staging och mappas till Compose utan att skrivas till Git eller logg.
 
-- `DEPLOY_HOST`
-- `DEPLOY_USER`
-- `DEPLOY_SSH_KEY`
-- `DEPLOY_KNOWN_HOSTS`
+Compose-projektet måste förbli `trading-agent-staging`, katalogen måste förbli
+`/srv/prod/staging/trader` och volymerna `postgres_data` samt `agent_data` får
+inte byta namn. Det är identitetskontraktet som bevarar ledger och agentdata
+över releaser.
 
-`DEPLOY_KNOWN_HOSTS` ska provisioneras i förväg. Workflowen använder
-inte `ssh-keyscan` och accepterar därför inte en okänd värd vid deploy.
+## Fristående produktionsprofil, ännu inte aktiv
 
-Variabeln `DEPLOY_PATH` är valfri och är `/opt/trading-agent` som
-standard.
+`ops/release/` innehåller fortfarande den hårdare fristående profilen för en
+framtida separat produktionsmiljö. Den används inte av Kajens staging och får
+inte aktiveras genom att återinföra en direkt SSH-workflow i apprepot.
 
-På servern ska `${DEPLOY_PATH}/runtime.env` skapas och förvaltas utanför
-Git/release-artefakter. Filen måste vara en absolut, vanlig,
+Om profilen tas i bruk ska `${DEPLOY_PATH}/runtime.env` skapas och förvaltas
+utanför Git/release-artefakter. Filen måste vara en absolut, vanlig,
 icke-symlinkad fil där grupp och övriga saknar all åtkomst, exempelvis
 läge `0600`. Secret-värden får inte ligga direkt i filen. Minimikrav:
 

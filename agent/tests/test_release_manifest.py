@@ -98,15 +98,20 @@ def test_release_manifest_targets_latest_database_schema():
 
 
 def test_agent_runtime_image_excludes_test_only_dependencies_and_state():
-    dockerignore = (ROOT / "agent" / ".dockerignore").read_text().splitlines()
+    dockerignore = (ROOT / ".dockerignore").read_text().splitlines()
+    dockerfile = (ROOT / "agent" / "Dockerfile").read_text()
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 
-    assert "tests" in dockerignore
-    assert "requirements-test.txt" in dockerignore
-    assert ".hypothesis" in dockerignore
-    assert "*.pem" in dockerignore
-    assert "*.key" in dockerignore
-    assert "known_hosts" in dockerignore
+    assert "agent/tests" in dockerignore
+    assert "agent/requirements-test.txt" in dockerignore
+    assert "agent/.hypothesis" in dockerignore
+    assert "**/*.pem" in dockerignore
+    assert "**/*.key" in dockerignore
+    assert "**/known_hosts" in dockerignore
+    assert "COPY agent/requirements.txt ." in dockerfile
+    assert "COPY --chown=agent:agent agent/src ./src" in dockerfile
+    assert "COPY --chown=agent:agent db ./db" in dockerfile
+    assert "postgresql-client" in dockerfile
     assert 'pip install --upgrade "pip>=26.2,<27"' in ci
     assert "python -m pip_audit -r requirements-test.txt" in ci
 
@@ -338,9 +343,8 @@ def test_release_manifest_rejects_image_from_another_repository(tmp_path):
         )
 
 
-def test_deployment_workflows_require_immutable_release_and_approval():
+def test_release_workflow_exposes_platform_verified_agent_digest():
     build = (ROOT / ".github/workflows/build-push.yml").read_text()
-    deploy = (ROOT / ".github/workflows/deploy.yml").read_text()
     compose = (
         ROOT / "ops/release/compose.production.yml"
     ).read_text()
@@ -358,14 +362,15 @@ def test_deployment_workflows_require_immutable_release_and_approval():
     assert build.count("docker/build-push-action@v7") == 2
     assert "--schema-min 48" in build
     assert "--schema-max 48" in build
-    assert "workflow_dispatch:" in deploy
-    assert "environment: production" in deploy
-    assert "concurrency:" in deploy
-    assert "actions/download-artifact@v5" in deploy
-    assert "run-id:" in deploy
-    assert "ssh-keyscan" not in deploy
-    assert "DEPLOY_KNOWN_HOSTS" in deploy
-    assert 'cp ops/release/runtime_profiles.py "$bundle/ops/release/"' in deploy
+    assert "run-name: image:${{ github.event.workflow_run.head_sha }}" in build
+    assert "context: ." in build
+    assert "file: agent/Dockerfile" in build
+    assert (
+        "image-proof-${{ env.RELEASE_SHA }}-"
+        "${{ steps.proof.outputs.digest_hex }}"
+    ) in build
+    assert "steps.agent.outputs.digest" in build
+    assert not (ROOT / ".github/workflows/deploy.yml").exists()
     assert "org.opencontainers.image.revision" in (
         ROOT / "ops/release/deploy.sh"
     ).read_text()
@@ -423,7 +428,6 @@ def test_production_release_uses_only_runtime_secret_mounts():
         ROOT / "ops/release/compose.production.yml"
     ).read_text()
     deploy = (ROOT / "ops/release/deploy.sh").read_text()
-    workflow = (ROOT / ".github/workflows/deploy.yml").read_text()
     migrate = (ROOT / "db/migrate.sh").read_text()
 
     for inline_name in (
@@ -462,7 +466,6 @@ def test_production_release_uses_only_runtime_secret_mounts():
     assert "environment: TRADING_AGENT_DATABASE_URL_SECRET" in compose
     assert "runtime_secrets.py" in deploy
     assert "TRADING_AGENT_DATABASE_URL_SECRET" in deploy
-    assert 'cp ops/release/runtime_secrets.py "$bundle/ops/release/"' in workflow
     assert "DATABASE_URL_FILE" in migrate
     assert ". \"$DATABASE_URL_FILE\"" not in migrate
     assert "--uid 10001" in (ROOT / "agent/Dockerfile").read_text()

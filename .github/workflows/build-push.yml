@@ -1,4 +1,5 @@
 name: Build immutable release
+run-name: image:${{ github.event.workflow_run.head_sha }}
 
 on:
   workflow_run:
@@ -47,7 +48,8 @@ jobs:
         id: agent
         uses: docker/build-push-action@v7
         with:
-          context: ./agent
+          context: .
+          file: agent/Dockerfile
           push: true
           tags: ${{ env.IMAGE_PREFIX }}/agent:${{ env.RELEASE_SHA }}
           labels: |
@@ -98,5 +100,30 @@ jobs:
         with:
           name: release-${{ env.RELEASE_SHA }}
           path: ${{ runner.temp }}/release/release.env
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish agent digest proof for platform deployment
+        id: proof
+        env:
+          AGENT_DIGEST: ${{ steps.agent.outputs.digest }}
+        run: |
+          case "$AGENT_DIGEST" in
+            sha256:*) ;;
+            *) exit 2 ;;
+          esac
+          digest_hex=${AGENT_DIGEST#sha256:}
+          case "$digest_hex" in
+            *[!0-9a-f]*|'') exit 2 ;;
+          esac
+          test "${#digest_hex}" -eq 64
+          printf '%s\n' "$AGENT_DIGEST" > "$RUNNER_TEMP/release/agent.digest"
+          printf 'digest_hex=%s\n' "$digest_hex" >> "$GITHUB_OUTPUT"
+
+      - name: Upload platform digest proof
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-proof-${{ env.RELEASE_SHA }}-${{ steps.proof.outputs.digest_hex }}
+          path: ${{ runner.temp }}/release/agent.digest
           if-no-files-found: error
           retention-days: 90

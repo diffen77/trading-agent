@@ -384,28 +384,21 @@ maskinläsbara orsaker; ett verkligt databasfel är fortfarande `503`.
 ## Release och rollback
 
 Grön CI producerar två provenance-attesterade images och ett gemensamt
-release-manifest med exakta SHA-256-digestar. Produktion är ett manuellt
-GitHub Environment-steg med känd SSH-hostnyckel och utan `latest` eller
-Watchtower. Servern flyttar releasepekaren först efter smoke-test och
-försöker kompatibel image-rollback vid fel; databasen rullas aldrig
-bakåt. Samma digest-pinnade release startar även `monitor`,
+release-manifest med exakta SHA-256-digestar. Agentimagen innehåller även
+de versionsbundna databasmigreringarna. Staging beställs och verifieras av
+`diffen77/plattform-deploy` på den self-hosted runnern på Kajen; apprepot
+lagrar därför varken servernycklar eller en bred GitHub-token. Plattformen
+hämtar hemligheter ur Bitwarden i processminnet, migrerar före byte,
+verifierar varje utbytt image och återställer föregående images om
+health-kontrollen faller. Databasen rullas aldrig bakåt. Samma release
+startar även `monitor`,
 `universe-sync` och `market-sync`; prisimporten förblir fail-closed
 tills feature-flagga, ISIN-mappning, policy och filacceptans är
 validerade.
-Deployen tolkar inte `runtime.env` som shellkod: en separat strikt
-parser tolkar literalflaggorna för publik pre-trade, avtalsbaserad
-delayed-data respektive referensdatasynk och en separat parser validerar endast absoluta
-`*_FILE`-sökvägar till låsta runtime-secrets. Inline-lösenord, tokens
-och API-nycklar i `runtime.env` avvisas. Secret-värdena monteras som
-`0400` under `/run/secrets` och exponeras inte som tjänsternas vanliga
-miljövariabler. Avstängda profiltjänster stoppas och `monitor` körs
-alltid.
 
-Pipeline, manifest, icke-root-konfiguration och simulerad rollback är
-verifierade. Releasemanifestet kräver schema 41. Schema 41, agent,
-dashboard, grafarbetarna och den separata market-sync-tjänsten är driftsatta och
-smoketestade på staging; automatisk rollback är testad i den isolerade
-releaseharnessen.
+Pipeline, manifest, icke-root-konfiguration och rollback är testade.
+Releasemanifestet kräver schema 48. Stagingens exakta deploystatus finns i
+[Aktuellt läge](docs/CURRENT_STATE.md).
 
 ## Strategiversioner och lärloop
 
