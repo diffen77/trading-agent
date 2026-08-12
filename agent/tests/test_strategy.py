@@ -3,10 +3,12 @@ import pytest
 from src.core.strategy import (
     ActiveStrategy,
     BASELINE_CONFIG,
+    DEFAULT_TRADING_OBJECTIVE,
     StrategyConfig,
     StrategyLearning,
     baseline_strategy,
     merge_strategy_patch,
+    render_objective_progress,
     render_system_prompt,
     strategy_config_hash,
 )
@@ -99,3 +101,30 @@ def test_prompt_names_version_and_treats_learning_as_evidence_only():
     assert "över_sma20=true" in prompt.lower()
     assert "Max positioner per sektor" not in prompt
     assert "Sektorkoncentration är information" in prompt
+
+
+def test_prompt_contains_measurable_goal_and_active_management_contract():
+    prompt = render_system_prompt(baseline_strategy())
+
+    assert "20 000 SEK" in prompt
+    assert "26 000 SEK" in prompt
+    assert "30% nettoavkastning" in prompt
+    assert "6–12 månader" in prompt
+    assert "bestående passivitet" in prompt.lower()
+    assert "SELL först och därefter BUY" in prompt
+    assert "aldrig en affär enbart för att skapa aktivitet" in prompt.lower()
+    assert "tom beslutslista är alltid tillåtet" not in prompt
+
+
+def test_objective_progress_exposes_target_gap_to_each_decision_cycle():
+    context = render_objective_progress(
+        DEFAULT_TRADING_OBJECTIVE,
+        current_equity_sek=19_397.68,
+    )
+
+    assert "Målversion:" in context
+    assert "Startkapital: 20 000 SEK" in context
+    assert "Målkapital: 26 000 SEK" in context
+    assert "Nuvarande portföljvärde: 19 398 SEK" in context
+    assert "Avkastning hittills: -3.01%" in context
+    assert "Kvar till mål: 6 602 SEK" in context

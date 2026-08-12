@@ -4,10 +4,15 @@
 En AI-agent som papertradar svenska aktier på Stockholmsbörsen, lär sig över tid, och visar sina beslut med tydliga motiveringar.
 
 ## Mål
-- Papertrading med 20 000 kr simulerat kapital
+- Aktiv papertrading från 20 000 kr mot 26 000 kr, motsvarande 30%
+  nettoavkastning efter simulerade kostnader inom 6–12 månader
+- Avkastningsmålet är ambitiöst och inte en garanti; datakvalitets- och
+  riskregler får aldrig kringgås för att nå det
+- Agenten ska ta kvalificerade affärer och rotera kapital när en ny kandidat
+  har tydligt bättre förväntad nettoavkastning än det svagaste innehavet
+- Bestående passivitet när kvalificerade möjligheter finns är inte godkänt,
+  men agenten ska aldrig handla enbart för att skapa aktivitet
 - Mäta nettoresultat och risk mot ett förutbestämt XSTO-benchmark
-- Prioritera kapitalbevarande och reproducerbarhet framför ett
-  orealistiskt avkastningsmål
 - Agenten ska förstå samband (makro → bolag)
 - Transparens: varje trade har en "varför"-rapport
 

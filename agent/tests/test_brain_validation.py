@@ -620,6 +620,97 @@ def test_third_position_in_same_sector_is_allowed_in_paper_trading():
     assert [decision["ticker"] for decision in validated] == ["SAND"]
 
 
+def test_full_portfolio_can_rotate_by_validating_sell_before_buy():
+    class RotationDatabase(FakeDatabase):
+        def __init__(self):
+            super().__init__(portfolio=[
+                {"ticker": "VOLV-B", "shares": 10},
+                {"ticker": "ATCO-A", "shares": 10},
+                {"ticker": "SAND", "shares": 10},
+                {"ticker": "ERIC-B", "shares": 10},
+                {"ticker": "SEB-A", "shares": 10},
+            ])
+
+        def query(self, sql, params=None):
+            if "FROM companies" in sql:
+                return [
+                    {"ticker": ticker, "sector": "Test"}
+                    for ticker in (
+                        "VOLV-B",
+                        "ATCO-A",
+                        "SAND",
+                        "ERIC-B",
+                        "SEB-A",
+                        "LIME",
+                    )
+                ]
+            return super().query(sql, params)
+
+    decisions = {
+        "decisions": [
+            buy("LIME", reason="Starkare momentum än svagaste innehavet"),
+            sell("VOLV-B", reason="Frigör plats för bättre kandidat"),
+        ],
+        "market_outlook": "neutral",
+        "analysis_summary": "Rotera kapitalet till bättre förväntad avkastning.",
+    }
+
+    validated = make_brain(RotationDatabase()).validate_decisions(decisions)
+
+    assert [(item["action"], item["ticker"]) for item in validated] == [
+        ("SELL", "VOLV-B"),
+        ("BUY", "LIME"),
+    ]
+
+
+def test_full_portfolio_does_not_execute_orphaned_rotation_sell():
+    class RejectedRotationDatabase(FakeDatabase):
+        def __init__(self):
+            super().__init__(portfolio=[
+                {"ticker": "VOLV-B", "shares": 10},
+                {"ticker": "ATCO-A", "shares": 10},
+                {"ticker": "SAND", "shares": 10},
+                {"ticker": "ERIC-B", "shares": 10},
+                {"ticker": "SEB-A", "shares": 10},
+            ])
+
+        def query(self, sql, params=None):
+            if "FROM companies" in sql:
+                return [
+                    {"ticker": ticker, "sector": "Test"}
+                    for ticker in (
+                        "VOLV-B",
+                        "ATCO-A",
+                        "SAND",
+                        "ERIC-B",
+                        "SEB-A",
+                        "LIME",
+                    )
+                ]
+            if "FROM technical_signals" in sql and params == {"ticker": "LIME"}:
+                return [{
+                    "date": datetime(2026, 7, 29).date(),
+                    "rsi": 50,
+                    "sma20": 105,
+                }]
+            return super().query(sql, params)
+
+    decisions = {
+        "decisions": [
+            sell("VOLV-B", reason="Frigör plats för LIME"),
+            buy("LIME", reason="Påstådd rotationskandidat"),
+        ],
+        "market_outlook": "neutral",
+        "analysis_summary": "Rotationen ska vara sammanhängande.",
+    }
+
+    validated = make_brain(RejectedRotationDatabase()).validate_decisions(
+        decisions
+    )
+
+    assert validated == []
+
+
 def test_valid_decision_is_normalized_and_gets_position_value():
     source = buy()
 
@@ -1128,3 +1219,104 @@ def test_ai_sell_caps_fill_to_executable_book_quantity():
     assert len(executed) == 1
     assert captured[0]["shares"] == 3
     assert captured[0]["total_value"] == 300
+
+
+def test_failed_rotation_sell_blocks_replacement_buy_execution():
+    buy_attempts = []
+
+    class RotationExecutionDatabase:
+        def get_portfolio(self):
+            return pd.DataFrame([{"ticker": "VOLV-B", "shares": 10}])
+
+        def log_trade_result(self, _trade):
+            return SimpleNamespace(trade_id=19, inserted=False)
+
+    class Trader:
+        def execute_trade(self, opportunity):
+            buy_attempts.append(opportunity)
+            return True
+
+    brain = make_brain(RotationExecutionDatabase())
+    executed = brain.execute_decisions(
+        [
+            {
+                "action": "SELL",
+                "ticker": "VOLV-B",
+                "confidence": 90,
+                "reason": "Frigör rotationsplats",
+                "execution_price": 100,
+                "source_quote_id": 41,
+                "source_book_state_id": None,
+                "_rotation_pair": True,
+            },
+            {
+                "action": "BUY",
+                "ticker": "LIME",
+                "confidence": 75,
+                "reason": "Bättre kandidat",
+                "position_value": 2_000,
+                "execution_price": 100,
+                "source_quote_id": 42,
+                "source_book_state_id": None,
+                "_rotation_pair": True,
+            },
+        ],
+        Trader(),
+        cycle_key="brain:test-rotation-execution",
+        strategy=baseline_strategy(),
+        decision_id=75,
+    )
+
+    assert executed == []
+    assert buy_attempts == []
+
+
+def test_successful_rotation_sell_allows_replacement_buy_execution():
+    buy_attempts = []
+
+    class RotationExecutionDatabase:
+        def get_portfolio(self):
+            return pd.DataFrame([{"ticker": "VOLV-B", "shares": 10}])
+
+        def log_trade_result(self, _trade):
+            return SimpleNamespace(trade_id=20, inserted=True)
+
+    class Trader:
+        def execute_trade(self, opportunity):
+            buy_attempts.append(opportunity)
+            return True
+
+    brain = make_brain(RotationExecutionDatabase())
+    brain.notifier = SimpleNamespace(notify_trade=lambda _trade: None)
+    executed = brain.execute_decisions(
+        [
+            {
+                "action": "SELL",
+                "ticker": "VOLV-B",
+                "confidence": 90,
+                "reason": "Frigör rotationsplats",
+                "execution_price": 100,
+                "source_quote_id": 41,
+                "source_book_state_id": None,
+                "_rotation_pair": True,
+            },
+            {
+                "action": "BUY",
+                "ticker": "LIME",
+                "confidence": 75,
+                "reason": "Bättre kandidat",
+                "position_value": 2_000,
+                "execution_price": 100,
+                "source_quote_id": 42,
+                "source_book_state_id": None,
+                "_rotation_pair": True,
+            },
+        ],
+        Trader(),
+        cycle_key="brain:test-successful-rotation",
+        strategy=baseline_strategy(),
+        decision_id=76,
+    )
+
+    assert [item["action"] for item in executed] == ["SELL", "BUY"]
+    assert [item["ticker"] for item in buy_attempts] == ["LIME"]

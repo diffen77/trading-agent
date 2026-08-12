@@ -22,7 +22,12 @@ from .risk import (
     validate_decision,
     validate_decision_response,
 )
-from .strategy import ActiveStrategy, render_system_prompt
+from .strategy import (
+    ActiveStrategy,
+    DEFAULT_TRADING_OBJECTIVE,
+    render_objective_progress,
+    render_system_prompt,
+)
 from ..model_config import (
     validate_hermes_model,
     validate_hermes_provider,
@@ -239,6 +244,22 @@ class TradingBrain:
         except Exception as e:
             logger.error(f"Portfolio context error: {e}")
             return "Portföljdata ej tillgänglig."
+
+    def _get_objective_context(self) -> str:
+        """Live progress toward the operator-owned paper-trading goal."""
+        try:
+            balance = self.db.get_balance()
+            return render_objective_progress(
+                DEFAULT_TRADING_OBJECTIVE,
+                current_equity_sek=balance["total_value"],
+            )
+        except Exception as exc:
+            logger.error(f"Objective context error: {exc}")
+            return (
+                f"Målversion: {DEFAULT_TRADING_OBJECTIVE.version}\n"
+                "Aktuell målprogression är inte tillgänglig; föreslå ingen "
+                "affär utan verifierbart portföljvärde."
+            )
 
     def _get_macro_context(self) -> str:
         """Current market context from governed provider evidence."""
@@ -645,6 +666,7 @@ class TradingBrain:
             else self._get_technical_context()
         )
         sections = [
+            ("UPPDRAG OCH MÅL", self._get_objective_context()),
             ("PORTFÖLJ", self._get_portfolio_context()),
             ("MAKRO", self._get_macro_context()),
             ("NYHETER (24h)", self._get_news_context()),
@@ -841,13 +863,25 @@ class TradingBrain:
         allowed_tickers = set(companies)
 
         current_tickers = set()
+        current_shares = {}
         if not portfolio.empty:
             for _, p in portfolio.iterrows():
-                if float(p.get('shares', 0)) > 0:
+                shares = float(p.get('shares', 0))
+                if shares > 0:
                     ticker = str(p['ticker']).upper()
                     current_tickers.add(ticker)
+                    current_shares[ticker] = shares
 
         num_positions = len(current_tickers)
+        started_at_capacity = num_positions >= config.max_positions
+        rotation_requested = started_at_capacity and any(
+            isinstance(candidate, dict)
+            and str(candidate.get("action", "")).strip().upper() == "BUY"
+            for candidate in raw
+        )
+        projected_cash = float(cash)
+        sold_tickers = set()
+        rotation_sell_accepted = False
         now = self._now_utc()
         try:
             operational_status = self.db.require_operational_market_data(now)
@@ -870,7 +904,20 @@ class TradingBrain:
                 "position, freshness and loss limits remain active"
             )
 
-        for candidate in raw:
+        ordered_raw = list(enumerate(raw))
+        if rotation_requested:
+            ordered_raw.sort(
+                key=lambda item: (
+                    0
+                    if isinstance(item[1], dict)
+                    and str(item[1].get("action", "")).strip().upper()
+                    == "SELL"
+                    else 1,
+                    item[0],
+                )
+            )
+
+        for _, candidate in ordered_raw:
             try:
                 d = validate_decision(
                     candidate,
@@ -959,6 +1006,12 @@ class TradingBrain:
                         )
                         continue
 
+                if ticker in sold_tickers:
+                    logger.info(
+                        f"🚫 {ticker} rejected: same-cycle SELL/BUY round trip"
+                    )
+                    continue
+
                 if num_positions >= config.max_positions:
                     logger.info(
                         f"🚫 {ticker} rejected: max "
@@ -981,8 +1034,8 @@ class TradingBrain:
                 position_value = total_value * size_pct / 100
 
                 # Check cash
-                if position_value > cash:
-                    position_value = cash * 0.9  # Use 90% of remaining cash
+                if position_value > projected_cash:
+                    position_value = projected_cash * 0.9
                     if position_value < 500:
                         logger.info(f"🚫 {ticker} rejected: insufficient cash")
                         continue
@@ -1063,6 +1116,7 @@ class TradingBrain:
                 validated.append(d)
                 num_positions += 1
                 current_tickers.add(ticker)
+                projected_cash -= position_value
 
             elif action == "SELL":
                 if ticker not in current_tickers:
@@ -1111,8 +1165,49 @@ class TradingBrain:
                     )
                     continue
 
+                shares = current_shares[ticker]
+                executable_quantity = d.get('executable_quantity')
+                shares_to_sell = (
+                    min(shares, float(executable_quantity))
+                    if executable_quantity is not None
+                    else shares
+                )
+                full_exit = shares_to_sell >= shares
+                if rotation_requested and not full_exit:
+                    logger.info(
+                        f"🚫 {ticker} SELL rejected: rotation requires a "
+                        "complete exit before replacement"
+                    )
+                    continue
+                if rotation_requested and rotation_sell_accepted:
+                    logger.info(
+                        f"🚫 {ticker} SELL rejected: at most one rotation "
+                        "is allowed per cycle"
+                    )
+                    continue
+
                 d['strategy_version'] = active_strategy.version
                 validated.append(d)
+                projected_cash += shares_to_sell * d['execution_price']
+                if full_exit:
+                    num_positions -= 1
+                    current_tickers.remove(ticker)
+                    sold_tickers.add(ticker)
+                    if rotation_requested:
+                        rotation_sell_accepted = True
+
+        if rotation_requested and not any(
+            item["action"] == "BUY" for item in validated
+        ):
+            validated = [
+                item for item in validated if item["action"] != "SELL"
+            ]
+            logger.info(
+                "Rotation cancelled: no replacement BUY passed validation"
+            )
+        elif rotation_requested:
+            for item in validated:
+                item["_rotation_pair"] = True
 
         # Check cash ratio - warn if too much cash sitting idle
         cash_ratio = (cash / total_value) * 100 if total_value > 0 else 0
@@ -1151,10 +1246,21 @@ class TradingBrain:
                 "decision_id is required for AI trade execution"
             )
         executed = []
+        rotation_sell_executed = False
 
         for d in decisions:
             action = d["action"].upper()
             ticker = d["ticker"]
+            if (
+                action == "BUY"
+                and d.get("_rotation_pair") is True
+                and not rotation_sell_executed
+            ):
+                logger.info(
+                    f"🚫 {ticker} BUY skipped: paired rotation SELL did "
+                    "not execute"
+                )
+                continue
             idempotency_key = trade_idempotency_key(
                 cycle_key=cycle_key,
                 action=action,
@@ -1274,6 +1380,8 @@ class TradingBrain:
                     }
                     result = self.db.log_trade_result(trade)
                     if result.inserted:
+                        if d.get("_rotation_pair") is True:
+                            rotation_sell_executed = True
                         executed.append(d)
                         logger.info(
                             f"✅ SELL {ticker} executed "
