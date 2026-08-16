@@ -14,6 +14,7 @@ class EveningDatabase:
         self.snapshot_times = []
         self.events = []
         self.observations = []
+        self.reports = []
 
     def save_portfolio_snapshot(self, *, recorded_at):
         self.snapshots += 1
@@ -24,6 +25,10 @@ class EveningDatabase:
         self.observations.append(observed_at)
         self.events.append("observation")
         return 42
+
+    def record_agent_evidence_report(self, *, period, generated_at):
+        self.reports.append((period, generated_at))
+        return len(self.reports)
 
 
 class EveningTrader:
@@ -62,6 +67,7 @@ def test_evening_routine_uses_one_injected_clock_for_learning_and_review():
     assert database.snapshot_times == [FRIDAY]
     assert database.observations == [FRIDAY]
     assert database.events == ["snapshot", "observation"]
+    assert database.reports == [("DAILY", FRIDAY), ("WEEKLY", FRIDAY)]
 
 
 def test_evening_routine_rejects_naive_clock_before_side_effects():
@@ -82,3 +88,4 @@ def test_evening_routine_rejects_naive_clock_before_side_effects():
     assert database.snapshots == 0
     assert database.snapshot_times == []
     assert database.observations == []
+    assert database.reports == []

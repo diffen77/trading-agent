@@ -54,6 +54,10 @@ def _runtime_secret_env_content(tmp_path, extra=""):
             "dashboard-password",
             "test-only-dashboard-password\n",
         ),
+        "OPERATIONS_READ_TOKEN_FILE": (
+            "operations-read-token",
+            "test-only-operations-read-token-32-bytes\n",
+        ),
         "S3_ACCESS_KEY_ID_FILE": (
             "s3-access-key-id",
             "test-only-s3-access\n",
@@ -81,8 +85,8 @@ def _values():
         "dashboard_image": (
             "ghcr.io/diffen77/trading-agent/dashboard@sha256:" + "c" * 64
         ),
-        "schema_min": 48,
-        "schema_max": 48,
+        "schema_min": 52,
+        "schema_max": 52,
         "created_at": "2026-07-29T12:00:00Z",
     }
 
@@ -283,8 +287,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
     )
 
     assert manifest.release_sha == "a" * 40
-    assert manifest.schema_min == 48
-    assert manifest.schema_max == 48
+    assert manifest.schema_min == 52
+    assert manifest.schema_max == 52
     assert manifest.agent_image.endswith("b" * 64)
     assert manifest_path.read_text().splitlines() == [
         f"RELEASE_SHA={'a' * 40}",
@@ -296,8 +300,8 @@ def test_release_manifest_round_trip_is_strict_and_shell_safe(tmp_path):
             "DASHBOARD_IMAGE=ghcr.io/diffen77/trading-agent/"
             f"dashboard@sha256:{'c' * 64}"
         ),
-        "SCHEMA_MIN=48",
-        "SCHEMA_MAX=48",
+        "SCHEMA_MIN=52",
+        "SCHEMA_MAX=52",
         "CREATED_AT=2026-07-29T12:00:00Z",
     ]
 
@@ -377,8 +381,8 @@ def test_release_workflow_exposes_platform_verified_agent_digest():
     assert "docker/setup-buildx-action@v4" in build
     assert "docker/login-action@v4" in build
     assert build.count("docker/build-push-action@v7") == 2
-    assert "--schema-min 48" in build
-    assert "--schema-max 48" in build
+    assert "--schema-min 52" in build
+    assert "--schema-max 52" in build
     assert "run-name: image:${{ github.event.workflow_run.head_sha }}" in build
     assert "context: ." in build
     assert "file: agent/Dockerfile" in build
@@ -392,6 +396,12 @@ def test_release_workflow_exposes_platform_verified_agent_digest():
         ROOT / "ops/release/deploy.sh"
     ).read_text()
     assert "org.opencontainers.image.source" in (
+        ROOT / "ops/release/deploy.sh"
+    ).read_text()
+    assert "verify_runtime_release_identity" in (
+        ROOT / "ops/release/deploy.sh"
+    ).read_text()
+    assert "process.env.RELEASE_SHA" in (
         ROOT / "ops/release/deploy.sh"
     ).read_text()
     assert "image: ${AGENT_IMAGE:?" in compose
@@ -452,6 +462,7 @@ def test_production_release_uses_only_runtime_secret_mounts():
         "DATABASE_URL:",
         "DASHBOARD_AUTH_USERNAME:",
         "DASHBOARD_AUTH_PASSWORD:",
+        "OPERATIONS_READ_TOKEN:",
         "ANTHROPIC_API_KEY:",
         "HERMES_API_KEY:",
         "OPENAI_COMPATIBLE_API_KEY:",
@@ -480,6 +491,14 @@ def test_production_release_uses_only_runtime_secret_mounts():
         "DASHBOARD_AUTH_PASSWORD_FILE: "
         "/run/secrets/dashboard_auth_password"
     ) in compose
+    assert (
+        "OPERATIONS_READ_TOKEN_FILE: /run/secrets/operations_read_token"
+        in compose
+    )
+    assert (
+        "environment: TRADING_AGENT_OPERATIONS_READ_TOKEN_SECRET"
+        in compose
+    )
     assert "environment: TRADING_AGENT_DATABASE_URL_SECRET" in compose
     assert "runtime_secrets.py" in deploy
     assert "TRADING_AGENT_DATABASE_URL_SECRET" in deploy
@@ -523,7 +542,7 @@ case "$*" in
       's#.*releases/\([0-9a-f]\{40\}\)/.*#\1#p' \
       > "$FAKE_ACTIVE_RELEASE_FILE"
     ;;
-  *" exec -T db psql "*) printf '48\n' ;;
+  *" exec -T db psql "*) printf '52\n' ;;
   *"image inspect "*"org.opencontainers.image.revision"*)
     if [ -n "$FAKE_IMAGE_REVISION" ]; then
       printf '%s\n' "$FAKE_IMAGE_REVISION"

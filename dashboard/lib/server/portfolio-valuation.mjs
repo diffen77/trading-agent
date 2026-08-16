@@ -121,6 +121,8 @@ SELECT
   trade.executed_at AS opened_at,
   trade.target_price,
   trade.stop_loss,
+  trade.exploration,
+  trade.exploration_policy_version,
   CASE
     WHEN trade.executed_at IS NULL THEN NULL
     ELSE EXTRACT(DAY FROM NOW() - trade.executed_at)::int
@@ -198,7 +200,20 @@ LEFT JOIN LATERAL (
     candidate.hypothesis,
     candidate.executed_at,
     candidate.target_price,
-    candidate.stop_loss
+    candidate.stop_loss,
+    COALESCE((
+      SELECT BOOL_OR(prediction.exploration)
+      FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = candidate.decision_id
+        AND prediction.ticker = candidate.ticker
+    ), FALSE) AS exploration,
+    (
+      SELECT MAX(prediction.exploration_policy_version)
+      FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = candidate.decision_id
+        AND prediction.ticker = candidate.ticker
+        AND prediction.exploration
+    ) AS exploration_policy_version
   FROM trades candidate
   WHERE candidate.ticker = position.ticker
     AND candidate.action = 'BUY'
@@ -293,6 +308,8 @@ export function buildPortfolioState(rows) {
         price_source: row.price_source,
         price_event_time: row.price_event_time,
         price_received_at: row.price_received_at,
+        exploration: row.exploration === true,
+        exploration_policy_version: row.exploration_policy_version ?? null,
       }
     })
     .sort((left, right) => right.market_value - left.market_value)

@@ -55,6 +55,10 @@ REQUIRED_TABLES = {
     "candidate_policy_calibration_runs",
     "candidate_policy_versions",
     "continuous_learning_runs",
+    "decision_funnel_events",
+    "exploration_policy_versions",
+    "position_opportunity_observations",
+    "agent_evidence_reports",
     "knowledge_graph_sync_runs",
     "knowledge_shadow_runs",
     "knowledge_shadow_decisions",
@@ -485,7 +489,7 @@ def test_runtime_schema_is_complete(connection):
         REQUIRED_PROVIDER_VALIDATION_COLUMNS
         <= provider_validation_columns
     )
-    assert schema_version == 48
+    assert schema_version == 52
     assert REQUIRED_COMPANY_COLUMNS <= company_columns
     assert REQUIRED_AI_DECISION_COLUMNS <= ai_decision_columns
     assert REQUIRED_MARKET_BAR_COLUMNS <= market_bar_columns

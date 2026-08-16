@@ -1,10 +1,109 @@
-# Roadmap
+# Roadmap mot 30 procents nettoavkastning
+
+Senast uppdaterad: 2026-08-16.
 
 ## Målbild
 
-En verifierbar papertrading-agent för Nasdaq Stockholm där datakvalitet
-och riskregler är deterministiska, alla beslut är spårbara och strategin
-mäts mot benchmark innan riktig handel ens övervägs.
+En verifierbar papertrading-agent som i paper trading försöker öka 20 000 SEK
+till 26 000 SEK på 6–12 månader efter simulerade kostnader. Målet är ambitiöst
+och inte en garanti. Datakvalitet och hårda säkerhetsgränser är
+deterministiska, alla beslut är spårbara och påstådd förbättring måste bevisas
+med tidsordnad forward-evidens.
+
+Bevisfasen använder Nasdaq Stockholm och högst 15 minuter fördröjd data med
+0 SEK i marknadsdatabudget. Agenten väljer själv instrument, timing,
+koncentration och strategi inom tekniskt validerade produktgränser. Ingen
+blankning, extern belåning eller riktig orderläggning är tillåten. Gränsen
+50 procents drawdown är ett absolut nödstopp, inte en normal riskbudget.
+
+## Aktuell genomförandeordning
+
+### P0 — sann drift och säker insyn
+
+1. **Read-only operationssammanfattning.** Codex och driftvakten ska via en
+   smal, autentiserad och freshness-kontrollerad väg kunna läsa senaste cykel,
+   dagens beslut och affärer, portfölj, öppna blockerare samt senaste outcome-,
+   policy- och graf-synk. `STALE` eller otillgängligt ska aldrig beskrivas som
+   noll affärer eller frisk drift.
+2. **Sann brain-jobbstatus.** Modell-timeout, HTTP-fel, tomt svar och ogiltig
+   JSON ska ge stabil felkod, kontrollerad retry, append-only körningsbevis och
+   larm. Ett giltigt `HOLD` är fortsatt en lyckad cykel.
+3. **Verifierad Neo4j-kedja.** Central Neo4j Brain på Neptun behåller
+   projektbeslut och aggregerad driftstatus. Den separata tradinggrafen på
+   Sjöboden verifieras från PostgreSQL via `knowledge-worker` till aktuell
+   `TradingGraphState`, med larm för stale synk och växande backlog. Hela
+   tradinggrafen ska inte dupliceras till central Brain.
+
+P0 är klart när en handelsfri dag kan skiljas maskinellt från en oläsbar
+ledger, ett trasigt modellsvar aldrig blir `SUCCEEDED` och båda Neo4j-spåren
+har färska, verifierade synkmarkörer.
+
+### P1 — aktivitet, lärande och kapitalrotation
+
+4. **Mät hela beslutstratten.** Visa antal lästa, filtrerade, rankade och
+   kvalificerade instrument, alla stoppande gates, modellhandling,
+   orderförsök, avvisningar och fills med stabila reason codes.
+5. **Kontrollerad exploration.** Låt en separat versionsstyrd paper-policy ta
+   små, tydligt märkta exploration-positioner när de ger mätbar ny
+   information. Ingen fast dagskvot ska tvinga fram dåliga affärer.
+6. **Starkare policybevis.** Segmentera utfall per marknadsregim, likviditet,
+   spread, sektor och tid på dagen. Jämför alltid mot parent-policy och enkla
+   deterministiska baslinjer, med automatisk rollback vid verifierad
+   försämring.
+7. **Exit och rotation.** Mät opportunity cost i öppna positioner och
+   kvaliteten på `SELL → BUY`-rotationer så en full portfölj inte blir en
+   permanent passivitetsorsak.
+
+P1 är klart när aktivitet mäts relativt verkliga möjligheter, exploration och
+ordinarie strategi kan jämföras separat och varje policybyte kan revideras
+från kandidat till senare utfall.
+
+### P1 — kostnadsfritt bevis över tid
+
+8. **Egen forward-databas.** Fortsätt samla tillåten fördröjd XSTO-data,
+   snapshotar, beslutstillgänglig data och senare utfall med event time,
+   available time, provider och checksumma. Återstart, gap och coverage ska
+   vara verifierbara.
+9. **Rullande shadow-jämförelse.** Jämför löpande mot kassa, en enkel
+   deterministisk strategi och en tydligt bevismärkt marknadsreferens. Detta
+   är utvecklingsevidens, inte det slutliga förregistrerade OMXSGI-benchmarket.
+10. **Automatisk dags- och veckorapport.** Rapportera drift, beslutstratt,
+    affärer, uteblivna affärer, datakvalitet, nya utfall, policyförändringar,
+    nettoresultat och drawdown. Bestående slutsatser skrivs till Cortex och
+    central Neo4j Brain; rå ledgerdata stannar i PostgreSQL/tradinggrafen.
+
+### P2 — överskådlighet
+
+11. **Ett kontrollrum.** Första dashboardvyn visar målprogress, senaste säkra
+    värdering, agentens puls, dagens aktivitet, datans färskhet, lärandets
+    utveckling och öppna blockerare. Teknisk detalj ligger bakom en utfällbar
+    vy.
+12. **Nuläge som följer driften.** `CURRENT_STATE.md`, GitHub, staging,
+    Cortex och Neo4j Brain ska inte kunna beskriva olika aktiva releaser utan
+    att en kontroll reagerar.
+
+### P3 — beslut som väntar
+
+Betald historik/realtidsdata, en ren officiell benchmarkledger,
+USA-expansion, broker, KYC och riktiga pengar tas som separata beslut först
+när den kostnadsfria paperfasen ger tillräckligt bevis. Inget av detta
+blockerar P0–P2.
+
+## Mätetal som styr arbetet
+
+- andel planerade cykler med sann slutstatus;
+- ledger-, marknadsdata- och graffärskhet;
+- universumtäckning och kvalificerade kandidater;
+- aktivitet per faktisk möjlighet, inte affärer per kalenderdag;
+- kalibrering och forward-resultat per score-band;
+- nettoresultat efter kostnader, drawdown, koncentration och turnover;
+- policyutfall mot parent och deterministiska baslinjer;
+- oklassificerade fel, falskt gröna körningar och öppna incidenter.
+
+## Leveransinventering
+
+Checklistorna nedan visar den redan byggda basen och kvarvarande större
+leveranser. Genomförandeordningen ovan avgör vad som görs först.
 
 ## P0 — Kapital- och dataintegritet
 
@@ -90,6 +189,9 @@ mäts mot benchmark innan riktig handel ens övervägs.
   data, missad körning, avvisad migration, ledgerfel och monitorfel
 - [x] Aktiva driftlarm och senaste schemarutiner synliga i dashboardens
   handelsberedskap
+- [x] Agentläsbar read-only operationssammanfattning med freshness-bevis
+- [x] Modell- och parsefel får aldrig maskeras som lyckad brain-cykel
+- [x] Färskhetslarm för tradinggrafens synkmarkör och backlog
 - [x] Människoläsbara positionskort med bolagsnamn som rubrik och
   ISIN/ticker som sekundär identifierare
 
@@ -113,6 +215,10 @@ mäts mot benchmark innan riktig handel ens övervägs.
   OMXSGI-feed
 - [ ] Kör minst 252 XSTO-sessioner och 30 stängda affärer mot OMXSGI
 - [x] Mätning av drawdown, turnover, hit rate och riskjusterad avkastning
+- [x] Full beslutstratt och samlade reason codes för handelsfria sessioner
+- [x] Separat, begränsad och utvärderingsbar exploration-policy
+- [x] Regimsegmenterad kalibrering och deterministiska jämförelsebaslinjer
+- [x] Opportunity-cost-mätning för innehav och kapitalrotation
 
 ## P1 — Produkt
 
@@ -120,7 +226,8 @@ mäts mot benchmark innan riktig handel ens övervägs.
 - [x] Fullständig paper-audit från råfil och quote till AI-beslut,
   bokförd order och ledgerutfall
 - [x] Portfölj, riskexponering, sektor och benchmark i samma vy
-- [x] Driftstatus utan att maskera fel som lyckade svar
+- [x] Dashboardens driftstatus maskerar inte databasfel som lyckade svar
+- [x] Scheduled brain-jobbets modell-/parsefel syns som misslyckade körningar
 - [x] Besökarprioriterad informationsordning med portföljresultat och
   senaste handling först samt teknisk evidens utfällbar
 - [x] Människoläsbara bolagsnamn i senaste handling, positioner och

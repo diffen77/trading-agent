@@ -41,6 +41,11 @@ class _Graph:
             },
             total_nodes=967,
             total_relationships=1022,
+            backlog={
+                "decisions": 3,
+                "predictions": 2,
+                "outcomes": 1,
+            },
         )
 
 
@@ -65,6 +70,7 @@ def test_cycle_syncs_graph_and_records_visible_operational_evidence():
             "synced_counts": result.synced,
             "total_nodes": 967,
             "total_relationships": 1022,
+            "backlog_counts": result.backlog,
             "error_code": None,
         }
     ]

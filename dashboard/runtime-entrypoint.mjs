@@ -11,4 +11,10 @@ for (const name of [
   })
 }
 
+process.env.OPERATIONS_READ_TOKEN = readRuntimeSecret(
+  process.env,
+  'OPERATIONS_READ_TOKEN',
+  { defaultValue: '' },
+)
+
 await import('./server.js')

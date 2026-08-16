@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from .data.database import Database
 from .core.analyzer import MarketAnalyzer
 from .core.trader import PaperTrader
-from .core.brain import TradingBrain
+from .core.brain import BrainCycleError, TradingBrain
 from .core.student import TradingStudent
 from .core.notifier import TelegramNotifier
 from .core.schedule import (
@@ -419,12 +419,17 @@ def run_daemon(db, analyzer, trader, brain=None, student=None):
                                 result["decisions_executed"],
                             )
                         except Exception as e:
+                            failure_code = (
+                                e.failure_code
+                                if isinstance(e, BrainCycleError)
+                                else "BRAIN_CYCLE_ERROR"
+                            )
                             try:
                                 db.complete_scheduled_job_run(
                                     job_key=cycle_key,
                                     claimed_at=claimed_at,
                                     status="FAILED",
-                                    failure_code="BRAIN_CYCLE_ERROR",
+                                    failure_code=failure_code,
                                     observed_at=now,
                                 )
                             except Exception:
@@ -433,7 +438,9 @@ def run_daemon(db, analyzer, trader, brain=None, student=None):
                                     exc_info=True,
                                 )
                             logger.error(
-                                f"Brain cycle error: {e}",
+                                "brain_cycle_failed slot=%d failure_code=%s",
+                                brain_slot,
+                                failure_code,
                                 exc_info=True,
                             )
             else:
@@ -801,6 +808,11 @@ def run_evening_routine(
     db.record_post_close_benchmark_observation(
         observed_at=checked_at,
     )
+    evidence_reporter = getattr(db, "record_agent_evidence_report", None)
+    if callable(evidence_reporter):
+        evidence_reporter(period="DAILY", generated_at=checked_at)
+        if local_now.weekday() == 4:
+            evidence_reporter(period="WEEKLY", generated_at=checked_at)
     
     logger.info("✅ Evening routine complete")
     return validated

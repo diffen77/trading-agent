@@ -128,6 +128,33 @@ def test_monitor_pages_when_continuous_learning_is_stale():
     assert "private" not in alerts[0].summary
 
 
+def test_monitor_pages_when_trading_graph_is_stale_or_backlog_grows():
+    readiness = _report(
+        "readiness",
+        HealthCheck(
+            "knowledge_graph_worker",
+            False,
+            "private graph detail",
+        ),
+    )
+
+    alerts = evaluate_operational_alerts(
+        readiness=readiness,
+        trading_readiness=_report(
+            "trading-readiness",
+            HealthCheck("operational_market_data", True, "ready"),
+        ),
+        missed_routine_keys=(),
+        critical_incident_count=0,
+        knowledge_graph_ready=False,
+    )
+
+    assert [alert.code for alert in alerts] == [
+        "KNOWLEDGE_GRAPH_NOT_READY"
+    ]
+    assert "private" not in alerts[0].summary
+
+
 def test_monitor_rejects_ambiguous_or_unbounded_inputs():
     healthy = _report(
         "readiness",
@@ -199,6 +226,15 @@ def test_monitor_run_persists_transitions_and_notifies_only_opened(
         def get_market_session(self, mic, _date):
             assert mic == "XSTO"
             return Session()
+
+        def get_knowledge_graph_runtime_status(self, *, now):
+            assert now == NOW
+            return {
+                "status": "SUCCEEDED",
+                "age_seconds": 60,
+                "backlog_total": 0,
+                "backlog_growing": False,
+            }
 
         def query(self, sql, _params=None):
             assert "paper_benchmark_incidents" in sql
@@ -306,6 +342,15 @@ def test_monitor_does_not_mark_delayed_open_missed_before_delivery_window(
         def get_market_session(self, mic, _date):
             assert mic == "XSTO"
             return Session()
+
+        def get_knowledge_graph_runtime_status(self, *, now):
+            assert now == observed_at
+            return {
+                "status": "SUCCEEDED",
+                "age_seconds": 60,
+                "backlog_total": 0,
+                "backlog_growing": False,
+            }
 
         def sync_operational_alerts(self, alerts, *, observed_at):
             self.synced = tuple(alerts)

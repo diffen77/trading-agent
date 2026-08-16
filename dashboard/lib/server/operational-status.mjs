@@ -1,7 +1,7 @@
 import { buildActivationActions } from './activation-actions.mjs'
 
 
-export const REQUIRED_SCHEMA_VERSION = 48
+export const REQUIRED_SCHEMA_VERSION = 52
 
 
 const OPERATIONAL_STATUS_QUERY = `
@@ -650,6 +650,106 @@ recent_scheduled_routines AS (
   ) latest
   ORDER BY scheduled_at DESC, observed_at DESC, id DESC
   LIMIT 10
+),
+activity_state AS (
+  SELECT
+    (NOW() AT TIME ZONE 'Europe/Stockholm')::date AS local_date,
+    (
+      SELECT COUNT(*)::int
+      FROM ai_decisions decision
+      WHERE (decision.timestamp AT TIME ZONE 'Europe/Stockholm')::date
+        = (NOW() AT TIME ZONE 'Europe/Stockholm')::date
+    ) AS decisions_today,
+    (
+      SELECT COUNT(*)::int
+      FROM trades trade
+      WHERE (trade.executed_at AT TIME ZONE 'Europe/Stockholm')::date
+        = (NOW() AT TIME ZONE 'Europe/Stockholm')::date
+    ) AS trades_today,
+    (SELECT MAX(timestamp) FROM ai_decisions) AS latest_decision_at,
+    (SELECT MAX(executed_at) FROM trades) AS latest_trade_at
+),
+pipeline_state AS (
+  SELECT
+    (SELECT status FROM continuous_learning_runs
+      ORDER BY evaluated_at DESC, id DESC LIMIT 1) AS learning_status,
+    (SELECT evaluated_at FROM continuous_learning_runs
+      ORDER BY evaluated_at DESC, id DESC LIMIT 1) AS learning_evaluated_at,
+    (SELECT error_code FROM continuous_learning_runs
+      ORDER BY evaluated_at DESC, id DESC LIMIT 1) AS learning_error_code,
+    (SELECT status FROM knowledge_graph_sync_runs
+      ORDER BY synced_at DESC, id DESC LIMIT 1) AS knowledge_status,
+    (SELECT synced_at FROM knowledge_graph_sync_runs
+      ORDER BY synced_at DESC, id DESC LIMIT 1) AS knowledge_synced_at,
+    (SELECT error_code FROM knowledge_graph_sync_runs
+      ORDER BY synced_at DESC, id DESC LIMIT 1) AS knowledge_error_code,
+    (SELECT backlog_counts FROM knowledge_graph_sync_runs
+      ORDER BY synced_at DESC, id DESC LIMIT 1) AS knowledge_backlog_counts
+),
+decision_funnel_state AS (
+  SELECT
+    decision.id AS ai_decision_id,
+    decision.timestamp AS decided_at,
+    (SELECT COUNT(*)::int FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = decision.id) AS candidates_read,
+    (SELECT COUNT(*)::int FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = decision.id
+        AND NOT prediction.eligible
+        AND NOT prediction.exploration) AS candidates_filtered,
+    (SELECT COUNT(*)::int FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = decision.id) AS candidates_ranked,
+    (SELECT COUNT(*)::int FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = decision.id
+        AND (prediction.eligible OR prediction.exploration)) AS candidates_eligible,
+    (SELECT COUNT(*)::int FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = decision.id
+        AND prediction.exploration) AS candidates_exploration,
+    (SELECT COUNT(*)::int FROM candidate_predictions prediction
+      WHERE prediction.ai_decision_id = decision.id
+        AND prediction.model_action != 'ABSTAIN') AS model_actions,
+    (SELECT COUNT(*)::int FROM decision_funnel_events event
+      WHERE event.ai_decision_id = decision.id
+        AND event.stage = 'VALIDATION_ACCEPTED') AS validations_accepted,
+    (SELECT COUNT(*)::int FROM decision_funnel_events event
+      WHERE event.ai_decision_id = decision.id
+        AND event.stage = 'VALIDATION_REJECTED') AS validations_rejected,
+    (SELECT COUNT(*)::int FROM decision_funnel_events event
+      WHERE event.ai_decision_id = decision.id
+        AND event.stage = 'ORDER_ATTEMPT') AS order_attempts,
+    (SELECT COUNT(*)::int FROM decision_funnel_events event
+      WHERE event.ai_decision_id = decision.id
+        AND event.stage = 'ORDER_REJECTED') AS order_rejections,
+    (SELECT COUNT(*)::int FROM decision_funnel_events event
+      WHERE event.ai_decision_id = decision.id
+        AND event.stage = 'ORDER_FILLED') AS fills,
+    COALESCE((
+      SELECT jsonb_object_agg(reason_code, reason_count)
+      FROM (
+        SELECT event.reason_code, COUNT(*)::int AS reason_count
+        FROM decision_funnel_events event
+        WHERE event.ai_decision_id = decision.id
+          AND event.stage IN ('VALIDATION_REJECTED', 'ORDER_REJECTED')
+        GROUP BY event.reason_code
+      ) reasons
+    ), '{}'::jsonb) AS stopping_reasons
+  FROM ai_decisions decision
+  ORDER BY decision.timestamp DESC, decision.id DESC
+  LIMIT 1
+),
+evidence_report_state AS (
+  SELECT
+    (SELECT report FROM agent_evidence_reports
+      WHERE period = 'DAILY'
+      ORDER BY generated_at DESC, id DESC LIMIT 1) AS daily_report,
+    (SELECT generated_at FROM agent_evidence_reports
+      WHERE period = 'DAILY'
+      ORDER BY generated_at DESC, id DESC LIMIT 1) AS daily_generated_at,
+    (SELECT report FROM agent_evidence_reports
+      WHERE period = 'WEEKLY'
+      ORDER BY generated_at DESC, id DESC LIMIT 1) AS weekly_report,
+    (SELECT generated_at FROM agent_evidence_reports
+      WHERE period = 'WEEKLY'
+      ORDER BY generated_at DESC, id DESC LIMIT 1) AS weekly_generated_at
 )
 SELECT
   NOW() AS checked_at,
@@ -789,12 +889,68 @@ SELECT
       FROM recent_scheduled_routines
     ),
     '[]'::jsonb
-  ) AS scheduled_routines
+  ) AS scheduled_routines,
+  (
+    SELECT jsonb_build_object(
+      'local_date', local_date,
+      'decisions_today', decisions_today,
+      'trades_today', trades_today,
+      'latest_decision_at', latest_decision_at,
+      'latest_trade_at', latest_trade_at
+    )
+    FROM activity_state
+  ) AS activity,
+  (
+    SELECT jsonb_build_object(
+      'learning_status', learning_status,
+      'learning_evaluated_at', learning_evaluated_at,
+      'learning_error_code', learning_error_code,
+      'knowledge_status', knowledge_status,
+      'knowledge_synced_at', knowledge_synced_at,
+      'knowledge_error_code', knowledge_error_code,
+      'knowledge_backlog_counts', knowledge_backlog_counts
+    )
+    FROM pipeline_state
+  ) AS pipelines,
+  (
+    SELECT jsonb_build_object(
+      'ai_decision_id', ai_decision_id,
+      'decided_at', decided_at,
+      'candidates_read', candidates_read,
+      'candidates_filtered', candidates_filtered,
+      'candidates_ranked', candidates_ranked,
+      'candidates_eligible', candidates_eligible,
+      'candidates_exploration', candidates_exploration,
+      'model_actions', model_actions,
+      'validations_accepted', validations_accepted,
+      'validations_rejected', validations_rejected,
+      'order_attempts', order_attempts,
+      'order_rejections', order_rejections,
+      'fills', fills,
+      'stopping_reasons', stopping_reasons
+    )
+    FROM decision_funnel_state
+  ) AS funnel,
+  (
+    SELECT jsonb_build_object(
+      'daily', daily_report,
+      'daily_generated_at', daily_generated_at,
+      'weekly', weekly_report,
+      'weekly_generated_at', weekly_generated_at
+    )
+    FROM evidence_report_state
+  ) AS evidence_reports
 `
 
 function numberOrZero(value) {
   const number = Number(value)
   return Number.isFinite(number) ? number : 0
+}
+
+function releaseSha(value) {
+  return typeof value === 'string' && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)
+    ? value
+    : null
 }
 
 
@@ -841,6 +997,11 @@ export function buildOperationalStatus(snapshot) {
     routine
     && typeof routine === 'object'
   )).slice(0, 10)
+  const activity = snapshot?.activity ?? {}
+  const pipelines = snapshot?.pipelines ?? {}
+  const funnel = snapshot?.funnel ?? {}
+  const evidenceReports = snapshot?.evidence_reports ?? {}
+  const runtimeReleaseSha = releaseSha(snapshot?.runtime_release_sha)
   const marketIsOpen = market.phase === 'OPEN'
   const publicPretrade = (
     provider?.data_type === 'delayed-pre-trade-equity'
@@ -849,6 +1010,9 @@ export function buildOperationalStatus(snapshot) {
 
   if (schemaVersion !== REQUIRED_SCHEMA_VERSION) {
     blockers.push('SCHEMA_VERSION_MISMATCH')
+  }
+  if (!runtimeReleaseSha) {
+    blockers.push('RELEASE_IDENTITY_UNAVAILABLE')
   }
   if (!strategy) {
     blockers.push('ACTIVE_STRATEGY_MISSING')
@@ -981,9 +1145,19 @@ export function buildOperationalStatus(snapshot) {
 
   const status = {
     checked_at: snapshot?.checked_at ?? null,
+    source: {
+      system_of_record: 'postgresql',
+      checked_at: snapshot?.checked_at ?? null,
+      read_status: snapshot?.checked_at ? 'CURRENT' : 'STALE',
+      max_age_seconds: 120,
+    },
     overall_status: blockers.length === 0 ? 'READY' : 'BLOCKED',
     blockers,
     schema_version: schemaVersion,
+    release: {
+      sha: runtimeReleaseSha,
+      status: runtimeReleaseSha ? 'VERIFIED' : 'UNAVAILABLE',
+    },
     strategy,
     universe: {
       ...universe,
@@ -1052,6 +1226,54 @@ export function buildOperationalStatus(snapshot) {
       active_alerts: operationalAlerts,
       scheduled_routines: scheduledRoutines,
     },
+    activity: {
+      local_date: activity.local_date ?? null,
+      decisions_today: numberOrZero(activity.decisions_today),
+      trades_today: numberOrZero(activity.trades_today),
+      latest_decision_at: activity.latest_decision_at ?? null,
+      latest_trade_at: activity.latest_trade_at ?? null,
+    },
+    pipelines: {
+      learning: {
+        status: pipelines.learning_status ?? null,
+        evaluated_at: pipelines.learning_evaluated_at ?? null,
+        error_code: pipelines.learning_error_code ?? null,
+      },
+      knowledge: {
+        status: pipelines.knowledge_status ?? null,
+        synced_at: pipelines.knowledge_synced_at ?? null,
+        error_code: pipelines.knowledge_error_code ?? null,
+        backlog: pipelines.knowledge_backlog_counts ?? {},
+      },
+    },
+    funnel: {
+      ai_decision_id: funnel.ai_decision_id ?? null,
+      decided_at: funnel.decided_at ?? null,
+      candidates_read: numberOrZero(funnel.candidates_read),
+      candidates_filtered: numberOrZero(funnel.candidates_filtered),
+      candidates_ranked: numberOrZero(funnel.candidates_ranked),
+      candidates_eligible: numberOrZero(funnel.candidates_eligible),
+      candidates_exploration: numberOrZero(
+        funnel.candidates_exploration,
+      ),
+      model_actions: numberOrZero(funnel.model_actions),
+      validations_accepted: numberOrZero(
+        funnel.validations_accepted,
+      ),
+      validations_rejected: numberOrZero(
+        funnel.validations_rejected,
+      ),
+      order_attempts: numberOrZero(funnel.order_attempts),
+      order_rejections: numberOrZero(funnel.order_rejections),
+      fills: numberOrZero(funnel.fills),
+      stopping_reasons: funnel.stopping_reasons ?? {},
+    },
+    evidence_reports: {
+      daily: evidenceReports.daily ?? null,
+      daily_generated_at: evidenceReports.daily_generated_at ?? null,
+      weekly: evidenceReports.weekly ?? null,
+      weekly_generated_at: evidenceReports.weekly_generated_at ?? null,
+    },
   }
 
   return {
@@ -1066,5 +1288,10 @@ export async function loadOperationalStatus(pool) {
   if (result.rows.length !== 1) {
     throw new Error('Operational status snapshot is missing')
   }
-  return buildOperationalStatus(result.rows[0])
+  return buildOperationalStatus({
+    ...result.rows[0],
+    runtime_release_sha: (
+      process.env.RELEASE_SHA ?? result.rows[0].runtime_release_sha
+    ),
+  })
 }

@@ -413,11 +413,18 @@ def render_candidate_context(candidates: Iterable[Mapping[str, Any]]) -> str:
         )
         if not all(math.isfinite(value) for value in values):
             raise CandidateSignalError("candidate render values must be finite")
-        eligibility = (
-            "valbar"
-            if row.get("eligible")
-            else f"ej valbar:{row.get('reason_code')}"
-        )
+        if row.get("exploration") is True:
+            eligibility = (
+                "exploration:"
+                f"{row.get('exploration_policy_version')} max "
+                f"{float(row.get('exploration_max_position_pct')):.1f}%"
+            )
+        else:
+            eligibility = (
+                "valbar"
+                if row.get("eligible")
+                else f"ej valbar:{row.get('reason_code')}"
+            )
         lines.append(
             f"{int(row['rank'])}. {row['name']} ({row['ticker']}): "
             f"score {values[0]:.1f}, 5m {values[1]:+.2f}%, "

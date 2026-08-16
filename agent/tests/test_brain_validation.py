@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 import src.core.brain as brain_module
-from src.core.brain import TradingBrain
+from src.core.brain import BrainCycleError, TradingBrain
 from src.core.strategy import baseline_strategy
 from src.data.market_data import MarketDataError, QuoteRecord
 from src.model_config import validate_hermes_url
@@ -532,6 +532,47 @@ def test_unknown_ticker_from_llm_is_rejected():
     assert validated == []
 
 
+def test_exploration_buy_is_marked_and_capped_at_five_percent():
+    decisions = response(buy(position_size_pct=15))
+    decisions["_exploration_tickers"] = {
+        "VOLV-B": {
+            "policy_version": "xsto-exploration-v1",
+            "max_position_pct": 5,
+        }
+    }
+
+    [validated] = make_brain().validate_decisions(decisions)
+
+    assert validated["exploration"] is True
+    assert validated["exploration_policy_version"] == "xsto-exploration-v1"
+    assert validated["position_size_pct"] == 5
+    assert validated["position_value"] == 1_000
+
+
+def test_validation_rejection_records_stable_funnel_reason():
+    class FunnelDatabase(FakeDatabase):
+        def __init__(self):
+            super().__init__()
+            self.funnel_events = []
+
+        def record_decision_funnel_events(self, **values):
+            self.funnel_events.extend(values["events"])
+            return len(values["events"])
+
+    database = FunnelDatabase()
+    decisions = response(buy(confidence=50))
+    decisions["_audit_id"] = 73
+
+    assert make_brain(database).validate_decisions(decisions) == []
+    assert [event["stage"] for event in database.funnel_events] == [
+        "MODEL_ACTION",
+        "VALIDATION_REJECTED",
+    ]
+    assert database.funnel_events[-1]["reason_code"] == (
+        "CONFIDENCE_BELOW_MINIMUM"
+    )
+
+
 def test_buy_below_sma20_is_rejected_as_mandatory_rule():
     db = FakeDatabase()
 
@@ -928,7 +969,9 @@ def test_missing_official_market_session_blocks_buy():
     assert make_brain(db).validate_decisions(response(buy())) == []
 
 
-def test_invalid_llm_json_fails_closed_and_is_audited():
+def test_invalid_llm_json_retries_once_then_fails_and_audits_each_attempt(
+    monkeypatch,
+):
     brain = make_brain()
     brain.backend = "test"
     brain.model = "test-model"
@@ -936,14 +979,66 @@ def test_invalid_llm_json_fails_closed_and_is_audited():
     brain._call_llm = lambda **kwargs: ("not-json", 12, 3)
     logged = []
     brain._log_decision = lambda **kwargs: logged.append(kwargs)
+    sleeps = []
+    monkeypatch.setattr(brain_module, "sleep", sleeps.append)
+
+    with pytest.raises(BrainCycleError) as raised:
+        brain.make_decisions()
+
+    assert raised.value.failure_code == "LLM_RESPONSE_INVALID"
+    assert len(logged) == 2
+    assert logged[0]["prompt_tokens"] == 12
+    assert logged[0]["response_tokens"] == 3
+    assert sleeps == [2]
+
+
+def test_empty_llm_response_retries_once_then_fails_with_stable_code(
+    monkeypatch,
+):
+    brain = make_brain()
+    brain.backend = "test"
+    brain.model = "test-model"
+    brain.build_context = lambda deep=False: "context"
+    brain._call_llm = lambda **kwargs: ("   ", 12, 0)
+    brain._log_decision = lambda **kwargs: 73
+    monkeypatch.setattr(brain_module, "sleep", lambda _seconds: None)
+
+    with pytest.raises(BrainCycleError) as raised:
+        brain.make_decisions()
+
+    assert raised.value.failure_code == "LLM_RESPONSE_EMPTY"
+
+
+def test_transient_model_error_retries_once_and_returns_valid_decision(
+    monkeypatch,
+):
+    brain = make_brain()
+    brain.backend = "test"
+    brain.model = "test-model"
+    brain.build_context = lambda deep=False: "context"
+    attempts = []
+    sleeps = []
+
+    def call_llm(**_kwargs):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            raise TimeoutError("temporary timeout")
+        return (
+            '{"decisions":[],"market_outlook":"neutral",'
+            '"analysis_summary":"test"}',
+            12,
+            3,
+        )
+
+    brain._call_llm = call_llm
+    brain._log_decision = lambda **kwargs: 73
+    monkeypatch.setattr(brain_module, "sleep", sleeps.append)
 
     result = brain.make_decisions()
 
-    assert result["decisions"] == []
-    assert result["market_outlook"] == "neutral"
-    assert len(logged) == 1
-    assert logged[0]["prompt_tokens"] == 12
-    assert logged[0]["response_tokens"] == 3
+    assert attempts == [1, 2]
+    assert sleeps == [2]
+    assert result["_audit_id"] == 73
 
 
 def test_ungoverned_news_and_report_rows_never_reach_ai_context():
@@ -1184,6 +1279,45 @@ def test_ai_execution_propagates_parent_decision_id_to_trade():
     assert captured[0]["decision_id"] == 73
     assert captured[0]["decision_origin"] == "AI_DECISION"
     assert captured[0]["executable_quantity"] == 12.5
+
+
+def test_successful_trade_records_attempt_and_fill_in_funnel():
+    recorded = []
+
+    class Database(FakeDatabase):
+        def record_decision_funnel_events(self, **values):
+            recorded.extend(values["events"])
+            return len(values["events"])
+
+    class Trader:
+        def execute_trade(self, _opportunity):
+            return True
+
+    brain = make_brain(Database())
+    brain.notifier = SimpleNamespace(notify_trade=lambda _trade: None)
+
+    brain.execute_decisions(
+        [{
+            "action": "BUY",
+            "ticker": "VOLV-B",
+            "confidence": 75,
+            "reason": "Momentum",
+            "position_value": 2_000,
+            "execution_price": 100,
+            "source_quote_id": 1,
+            "source_book_state_id": None,
+        }],
+        Trader(),
+        cycle_key="brain:test-funnel",
+        strategy=baseline_strategy(),
+        decision_id=73,
+    )
+
+    assert [event["stage"] for event in recorded] == [
+        "ORDER_ATTEMPT",
+        "ORDER_FILLED",
+    ]
+    assert recorded[-1]["reason_code"] == "PAPER_TRADE_FILLED"
 
 
 def test_ai_sell_caps_fill_to_executable_book_quantity():

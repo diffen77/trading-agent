@@ -95,6 +95,12 @@ class _Database:
 
     def query(self, sql, params=None):
         self.queries.append((sql, params or {}))
+        if "source_max_decision_id" in sql:
+            return [{
+                "source_max_decision_id": 7,
+                "source_max_prediction_id": 11,
+                "source_max_outcome_id": 14,
+            }]
         if "FROM instruments instrument" in sql:
             return [
                 {
@@ -257,6 +263,11 @@ def test_sync_is_idempotent_and_only_copies_bounded_structured_evidence():
     assert result.synced["predictions"] == 1
     assert result.synced["outcomes"] == 1
     assert result.synced["trades"] == 1
+    assert result.backlog == {
+        "decisions": 3,
+        "predictions": 3,
+        "outcomes": 2,
+    }
     assert all(
         parameters["database_"] == "neo4j"
         for _, parameters in driver.calls
@@ -268,6 +279,9 @@ def test_sync_is_idempotent_and_only_copies_bounded_structured_evidence():
     assert "raw_response" not in graph_queries
     assert "trade.reasoning" not in graph_queries
     assert "market_data_json" not in graph_queries
+    assert "s.backlog_decisions" in graph_queries
+    assert "s.backlog_predictions" in graph_queries
+    assert "s.backlog_outcomes" in graph_queries
     source_queries = "\n".join(sql for sql, _ in database.queries)
     assert "raw_response" not in source_queries
     assert "trade.reasoning" not in source_queries

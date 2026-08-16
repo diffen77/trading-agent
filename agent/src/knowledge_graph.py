@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -131,6 +131,7 @@ class KnowledgeSyncResult:
     total_nodes: int
     total_relationships: int
     error_code: str | None = None
+    backlog: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -544,7 +545,39 @@ class KnowledgeGraph:
             for row in rows
         ]
 
-    def _source_rows(self, database, state: dict[str, int]) -> dict[str, list]:
+    @staticmethod
+    def _source_high_water_marks(database) -> dict[str, int]:
+        rows = database.query(
+            """
+            SELECT
+                COALESCE((SELECT MAX(id) FROM ai_decisions), 0)::BIGINT
+                    AS source_max_decision_id,
+                COALESCE((SELECT MAX(id) FROM candidate_predictions), 0)::BIGINT
+                    AS source_max_prediction_id,
+                COALESCE((
+                    SELECT MAX(id) FROM candidate_prediction_outcomes
+                ), 0)::BIGINT AS source_max_outcome_id
+            """
+        )
+        row = rows[0] if rows else {}
+        return {
+            "last_decision_id": int(
+                row.get("source_max_decision_id") or 0
+            ),
+            "last_prediction_id": int(
+                row.get("source_max_prediction_id") or 0
+            ),
+            "last_outcome_id": int(
+                row.get("source_max_outcome_id") or 0
+            ),
+        }
+
+    def _source_rows(
+        self,
+        database,
+        state: dict[str, int],
+        source_high_water: dict[str, int],
+    ) -> dict[str, list]:
         limit = self.settings.batch_size
         return {
             "instruments": database.query(
@@ -623,11 +656,13 @@ class KnowledgeGraph:
                     decision.response_tokens
                 FROM ai_decisions decision
                 WHERE decision.id > :after_id
+                  AND decision.id <= :through_id
                 ORDER BY decision.id
                 LIMIT :limit
                 """,
                 {
                     "after_id": state["last_decision_id"],
+                    "through_id": source_high_water["last_decision_id"],
                     "limit": limit,
                 },
             ),
@@ -650,11 +685,13 @@ class KnowledgeGraph:
                     prediction.feature_checksum_sha256
                 FROM candidate_predictions prediction
                 WHERE prediction.id > :after_id
+                  AND prediction.id <= :through_id
                 ORDER BY prediction.id
                 LIMIT :limit
                 """,
                 {
                     "after_id": state["last_prediction_id"],
+                    "through_id": source_high_water["last_prediction_id"],
                     "limit": limit,
                 },
             ),
@@ -670,11 +707,13 @@ class KnowledgeGraph:
                     outcome.return_bps
                 FROM candidate_prediction_outcomes outcome
                 WHERE outcome.id > :after_id
+                  AND outcome.id <= :through_id
                 ORDER BY outcome.id
                 LIMIT :limit
                 """,
                 {
                     "after_id": state["last_outcome_id"],
+                    "through_id": source_high_water["last_outcome_id"],
                     "limit": limit,
                 },
             ),
@@ -930,7 +969,8 @@ class KnowledgeGraph:
             raise ValueError("synced_at must be timezone-aware")
         checked_at = synced_at.astimezone(timezone.utc)
         state = self._state()
-        source = self._source_rows(database, state)
+        source_high_water = self._source_high_water_marks(database)
+        source = self._source_rows(database, state, source_high_water)
         self._merge_rows(source)
         statistics = self._statistics()
         next_state = {
@@ -947,6 +987,23 @@ class KnowledgeGraph:
                 state["last_outcome_id"],
             ),
         }
+        backlog = {
+            "decisions": max(
+                source_high_water["last_decision_id"]
+                - next_state["last_decision_id"],
+                0,
+            ),
+            "predictions": max(
+                source_high_water["last_prediction_id"]
+                - next_state["last_prediction_id"],
+                0,
+            ),
+            "outcomes": max(
+                source_high_water["last_outcome_id"]
+                - next_state["last_outcome_id"],
+                0,
+            ),
+        }
         self._execute(
             """
             MERGE (s:TradingGraphState {key: $key})
@@ -956,12 +1013,18 @@ class KnowledgeGraph:
                 s.last_outcome_id = $last_outcome_id,
                 s.last_synced_at = $last_synced_at,
                 s.total_nodes = $total_nodes,
-                s.total_relationships = $total_relationships
+                s.total_relationships = $total_relationships,
+                s.backlog_decisions = $backlog_decisions,
+                s.backlog_predictions = $backlog_predictions,
+                s.backlog_outcomes = $backlog_outcomes
             """,
             key=_SYNC_STATE_KEY,
             last_synced_at=checked_at,
             total_nodes=statistics["total_nodes"],
             total_relationships=statistics["total_relationships"],
+            backlog_decisions=backlog["decisions"],
+            backlog_predictions=backlog["predictions"],
+            backlog_outcomes=backlog["outcomes"],
             **next_state,
         )
         synced = {name: len(rows) for name, rows in source.items()}
@@ -971,4 +1034,5 @@ class KnowledgeGraph:
             synced=synced,
             total_nodes=statistics["total_nodes"],
             total_relationships=statistics["total_relationships"],
+            backlog=backlog,
         )

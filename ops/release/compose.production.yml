@@ -452,9 +452,11 @@ services:
       migrate:
         condition: service_completed_successfully
     environment:
+      RELEASE_SHA: ${RELEASE_SHA:?RELEASE_SHA must identify the immutable release}
       DATABASE_URL_FILE: /run/secrets/database_url
       DASHBOARD_AUTH_USERNAME_FILE: /run/secrets/dashboard_auth_username
       DASHBOARD_AUTH_PASSWORD_FILE: /run/secrets/dashboard_auth_password
+      OPERATIONS_READ_TOKEN_FILE: /run/secrets/operations_read_token
     secrets:
       - source: database_url
         target: database_url
@@ -468,6 +470,11 @@ services:
         mode: 0400
       - source: dashboard_auth_password
         target: dashboard_auth_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: operations_read_token
+        target: operations_read_token
         uid: "1000"
         gid: "1000"
         mode: 0400
@@ -500,6 +507,8 @@ secrets:
     environment: TRADING_AGENT_DASHBOARD_AUTH_USERNAME_SECRET
   dashboard_auth_password:
     environment: TRADING_AGENT_DASHBOARD_AUTH_PASSWORD_SECRET
+  operations_read_token:
+    environment: TRADING_AGENT_OPERATIONS_READ_TOKEN_SECRET
   anthropic_api_key:
     environment: TRADING_AGENT_ANTHROPIC_API_KEY_SECRET
   hermes_api_key:

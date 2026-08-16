@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from src.core.brain import BrainCycleError
 from src.core.schedule import brain_cycle_slot
 from src.main import run_daemon
 
@@ -140,6 +141,44 @@ def test_brain_cycle_refreshes_prospects_before_analysis(monkeypatch):
         "prospects",
         "brain",
     ]
+
+
+def test_model_response_failure_marks_brain_job_failed_with_stable_code(
+    monkeypatch,
+):
+    class Analyzer:
+        def run_technical_analysis(self):
+            return []
+
+        def update_prospects(self, *, now):
+            assert now == NOW
+            return 3
+
+    class Trader:
+        def check_positions(self, *, now):
+            assert now == NOW
+
+    class Brain:
+        def run_cycle(self, trader, *, deep, cycle_key):
+            raise BrainCycleError("LLM_RESPONSE_INVALID")
+
+    monkeypatch.setattr("src.main.datetime", FixedDateTime)
+    monkeypatch.setattr(
+        "src.main.due_routines",
+        lambda _now, *, completed: (),
+    )
+    monkeypatch.setattr(
+        "src.main.time.sleep",
+        lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+    database = OpenMarketDatabase()
+
+    run_daemon(database, Analyzer(), Trader(), brain=Brain())
+
+    assert database.job_completions[-1]["status"] == "FAILED"
+    assert database.job_completions[-1]["failure_code"] == (
+        "LLM_RESPONSE_INVALID"
+    )
 
 
 def test_brain_cycle_runs_again_in_next_fifteen_minute_slot(monkeypatch):

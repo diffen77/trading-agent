@@ -14,7 +14,7 @@ import {
   ContinuousLearningPanel,
   type ContinuousLearningStatus,
 } from './continuous-learning-panel'
-import { VisitorOverview } from './visitor-overview'
+import { ControlRoom } from './control-room'
 import {
   decisionActionPresentation,
   decisionCompanyLabel,
@@ -22,7 +22,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────
 interface Portfolio { cash: number; positions_value: number; total_value: number; pnl: number; pnl_pct: number }
-interface Position { ticker: string; shares: number; avg_price: number; current_price: number; company_name: string; sector: string; rsi: number; confidence: number; reasoning: string; pnl_pct: number; pnl_kr: number; market_value: number; days_held: number; target_price: number; stop_loss: number; price_source: string; price_event_time: string; price_received_at: string }
+interface Position { ticker: string; shares: number; avg_price: number; current_price: number; company_name: string; sector: string; rsi: number; confidence: number; reasoning: string; pnl_pct: number; pnl_kr: number; market_value: number; days_held: number; target_price: number; stop_loss: number; price_source: string; price_event_time: string; price_received_at: string; exploration: boolean; exploration_policy_version: string | null }
 interface HistoryPoint { total_value: number; recorded_at: string }
 interface Macro { symbol: string; type: string; value: number; change_pct: number }
 interface Decision {
@@ -41,7 +41,7 @@ interface Decision {
   reasoning_effort: string | null
   response_model: string | null
 }
-interface Trade { id: number; ticker: string; company_name: string | null; action: string; shares: number; price: number; total_value: number; reasoning: string; confidence: number | null; hypothesis: string | null; executed_at: string; pnl: number | null; closed_at: string | null; outcome: string | null; strategy_version: string; decision_id: number | null; decision_origin: string; source_quote_id: number | null; source_book_state_id: number | null; source_evidence_type: 'PRE_TRADE_BOOK' | 'LAST_TRADE_QUOTE' | null; decision_timestamp: string | null; quote_event_time: string | null; quote_received_at: string | null; source_file_checksum: string | null }
+interface Trade { id: number; ticker: string; company_name: string | null; action: string; shares: number; price: number; total_value: number; reasoning: string; confidence: number | null; hypothesis: string | null; executed_at: string; pnl: number | null; closed_at: string | null; outcome: string | null; strategy_version: string; decision_id: number | null; decision_origin: string; source_quote_id: number | null; source_book_state_id: number | null; source_evidence_type: 'PRE_TRADE_BOOK' | 'LAST_TRADE_QUOTE' | null; decision_timestamp: string | null; quote_event_time: string | null; quote_received_at: string | null; source_file_checksum: string | null; exploration: boolean; exploration_policy_version: string | null }
 interface Performance { total_trades: number; buys: number; sells: number; winners: number; losers: number; win_rate: number; avg_win: number; avg_loss: number; total_pnl: number; best_trade: number; worst_trade: number; avg_confidence: number; open_positions: number }
 interface OperationsStatus {
   checked_at: string | null
@@ -49,6 +49,7 @@ interface OperationsStatus {
   blockers: string[]
   activation_actions: ActivationAction[]
   schema_version: number
+  release: { sha: string | null; status: 'VERIFIED' | 'UNAVAILABLE' }
   strategy: null | {
     version: string
     config: {
@@ -160,10 +161,44 @@ interface OperationsStatus {
       observed_at: string
     }>
   }
+  activity: {
+    local_date: string | null
+    decisions_today: number
+    trades_today: number
+    latest_decision_at: string | null
+    latest_trade_at: string | null
+  }
+  pipelines: {
+    learning: { status: string | null; evaluated_at: string | null; error_code: string | null }
+    knowledge: { status: string | null; synced_at: string | null; error_code: string | null; backlog: Record<string, number> }
+  }
+  funnel: {
+    ai_decision_id: number | null
+    decided_at: string | null
+    candidates_read: number
+    candidates_filtered: number
+    candidates_ranked: number
+    candidates_eligible: number
+    candidates_exploration: number
+    model_actions: number
+    validations_accepted: number
+    validations_rejected: number
+    order_attempts: number
+    order_rejections: number
+    fills: number
+    stopping_reasons: Record<string, number>
+  }
+  evidence_reports: {
+    daily: Record<string, unknown> | null
+    daily_generated_at: string | null
+    weekly: Record<string, unknown> | null
+    weekly_generated_at: string | null
+  }
 }
 
 const BLOCKER_LABELS: Record<string, string> = {
   SCHEMA_VERSION_MISMATCH: 'Databasschemat har fel version',
+  RELEASE_IDENTITY_UNAVAILABLE: 'Aktiv release kan inte verifieras mot GitHub',
   ACTIVE_STRATEGY_MISSING: 'Aktiv och verifierad strategi saknas',
   REFERENCE_SNAPSHOT_MISSING: 'Referenssnapshot för XSTO saknas',
   REFERENCE_ENTITLEMENT_NOT_READY: 'Licens- och lagringsbevis för referensdata saknas',
@@ -341,11 +376,11 @@ export default function Dashboard() {
           </div>
         )}
 
-        <VisitorOverview
+        <ControlRoom
           portfolio={p}
-          dailyReturnPct={ops.risk.daily_return_pct}
-          latestTrade={trades[0] ?? null}
-          benchmark={ops.benchmark}
+          operations={ops}
+          learning={learning}
+          blockerLabels={BLOCKER_LABELS}
         />
 
         <ContinuousLearningPanel status={learning} />
@@ -646,6 +681,11 @@ export default function Dashboard() {
                           <span className={`rounded px-2 py-0.5 text-xs font-semibold ${trade.action === 'BUY' ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300'}`}>
                             {trade.action === 'BUY' ? 'Köpt' : trade.action === 'SELL' ? 'Sålt' : trade.action}
                           </span>
+                          {trade.exploration && (
+                            <span className="rounded bg-blue-950 px-2 py-0.5 text-xs font-semibold text-blue-200">
+                              Exploration
+                            </span>
+                          )}
                           <h3 className="font-semibold">{tradeName}</h3>
                         </div>
                         {tradeName !== trade.ticker && (
@@ -802,6 +842,7 @@ function PositionCard({ pos }: { pos: Position }) {
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-bold leading-tight">{displayName}</h3>
             {sectorLabel && <span className="text-[10px] px-1.5 py-0.5 bg-gray-800 rounded text-gray-400">{sectorLabel}</span>}
+            {pos.exploration && <span className="rounded bg-blue-950 px-1.5 py-0.5 text-[10px] font-semibold text-blue-200">Exploration</span>}
           </div>
           {displayName !== pos.ticker && (
             <div className="mt-1 text-xs text-gray-500">

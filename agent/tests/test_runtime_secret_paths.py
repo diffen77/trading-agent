@@ -27,6 +27,7 @@ def _runtime_env(tmp_path: Path) -> Path:
         "DATABASE_URL_FILE": "database-url",
         "DASHBOARD_AUTH_USERNAME_FILE": "dashboard-user",
         "DASHBOARD_AUTH_PASSWORD_FILE": "dashboard-password",
+        "OPERATIONS_READ_TOKEN_FILE": "operations-read-token",
     }
     lines = []
     for key, file_name in values.items():
@@ -51,6 +52,7 @@ def test_release_runtime_secret_paths_are_absolute_locked_and_complete(
         "DATABASE_URL_FILE",
         "DASHBOARD_AUTH_USERNAME_FILE",
         "DASHBOARD_AUTH_PASSWORD_FILE",
+        "OPERATIONS_READ_TOKEN_FILE",
     }
     assert all(path.is_absolute() for path in paths.values())
 

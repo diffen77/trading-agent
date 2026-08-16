@@ -70,6 +70,7 @@ def run_knowledge_cycle(
             synced_at=checked_at,
             status=result.status,
             synced_counts=result.synced,
+            backlog_counts=result.backlog,
             total_nodes=result.total_nodes,
             total_relationships=result.total_relationships,
             error_code=result.error_code,

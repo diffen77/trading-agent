@@ -18,6 +18,7 @@ from .data.database import Database
 from .healthcheck import (
     HealthMode,
     HealthReport,
+    collect_knowledge_graph_health_check,
     collect_health_report,
 )
 
@@ -84,6 +85,7 @@ def evaluate_operational_alerts(
     missed_routine_keys: Iterable[str],
     critical_incident_count: int,
     market_data_expected: bool = True,
+    knowledge_graph_ready: bool | None = None,
 ) -> tuple[OperationalAlert, ...]:
     """Map bounded health evidence to stable, actionable alert identities."""
     if (
@@ -134,6 +136,15 @@ def evaluate_operational_alerts(
                 "CRITICAL_BENCHMARK_INCIDENT",
                 "PAGE",
                 "Forward paper benchmark has a critical incident",
+            )
+        )
+    if knowledge_graph_ready is False:
+        alerts.append(
+            OperationalAlert(
+                "knowledge-graph",
+                "KNOWLEDGE_GRAPH_NOT_READY",
+                "PAGE",
+                "Trading knowledge graph is stale, failed or falling behind",
             )
         )
     return tuple(alerts)
@@ -207,6 +218,10 @@ def run_monitor_once(
         missed_routine_keys=(routine.key for routine in missed),
         critical_incident_count=critical_count,
         market_data_expected=market_data_expected,
+        knowledge_graph_ready=collect_knowledge_graph_health_check(
+            database,
+            observed_at,
+        ).ok,
     )
     transitions = database.sync_operational_alerts(
         alerts,

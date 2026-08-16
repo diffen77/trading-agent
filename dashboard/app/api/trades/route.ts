@@ -41,6 +41,19 @@ export async function GET() {
         trade.strategy_version,
         trade.decision_id,
         trade.decision_origin,
+        COALESCE((
+          SELECT BOOL_OR(prediction.exploration)
+          FROM candidate_predictions prediction
+          WHERE prediction.ai_decision_id = trade.decision_id
+            AND prediction.ticker = trade.ticker
+        ), FALSE) AS exploration,
+        (
+          SELECT MAX(prediction.exploration_policy_version)
+          FROM candidate_predictions prediction
+          WHERE prediction.ai_decision_id = trade.decision_id
+            AND prediction.ticker = trade.ticker
+            AND prediction.exploration
+        ) AS exploration_policy_version,
         trade.source_quote_id,
         trade.source_book_state_id,
         decision.timestamp AS decision_timestamp,

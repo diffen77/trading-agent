@@ -11,6 +11,10 @@ const activationQueue = readFileSync(
   new URL('../app/activation-queue.tsx', import.meta.url),
   'utf8',
 )
+const controlRoom = readFileSync(
+  new URL('../app/control-room.tsx', import.meta.url),
+  'utf8',
+)
 
 
 test('dashboard fetches and renders operational readiness evidence', () => {
@@ -69,7 +73,7 @@ test('position cards prioritize the human-readable company name', () => {
 
 
 test('visitor content comes before collapsed technical evidence', () => {
-  const visitorOverview = page.indexOf('<VisitorOverview')
+  const visitorOverview = page.indexOf('<ControlRoom')
   const technicalDetails = page.indexOf('<details')
   const positions = page.indexOf('Positioner ({positions.length})')
 
@@ -81,6 +85,11 @@ test('visitor content comes before collapsed technical evidence', () => {
     page,
     /<details[\s\S]*<ActivationQueue[\s\S]*<UniversePanel[\s\S]*<\/details>/,
   )
+  assert.match(controlRoom, /Senaste säkra värdering/)
+  assert.match(controlRoom, /Beslut idag/)
+  assert.match(controlRoom, /Datans färskhet/)
+  assert.match(controlRoom, /Senaste beslutstratten/)
+  assert.match(controlRoom, /Det som stoppar aktivitet/)
 })
 
 

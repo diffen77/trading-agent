@@ -81,7 +81,7 @@ def collect_health_report(
             HealthCheck(
                 code="database_schema",
                 ok=False,
-                detail="database unavailable or schema below version 45",
+                detail="database unavailable or schema below version 52",
             )
         )
         return _report(mode, now, checks)
@@ -90,7 +90,7 @@ def collect_health_report(
         HealthCheck(
             code="database_schema",
             ok=True,
-            detail="database reachable with schema version 45 or newer",
+            detail="database reachable with schema version 52 or newer",
         )
     )
     _check_ledger(database, checks)
@@ -238,6 +238,34 @@ def _check_continuous_learning(
     )
 
 
+def collect_knowledge_graph_health_check(
+    database,
+    now: datetime,
+) -> HealthCheck:
+    try:
+        status = database.get_knowledge_graph_runtime_status(now=now) or {}
+        age_seconds = int(status.get("age_seconds") or 0)
+        backlog_total = int(status.get("backlog_total") or 0)
+        backlog_growing = status.get("backlog_growing") is True
+        ok = (
+            status.get("status") == "SUCCEEDED"
+            and 0 <= age_seconds <= 900
+            and backlog_total >= 0
+            and not backlog_growing
+        )
+    except Exception:
+        ok = False
+    return HealthCheck(
+        code="knowledge_graph_worker",
+        ok=ok,
+        detail=(
+            "trading graph synced within 15 minutes without growing backlog"
+            if ok
+            else "trading graph is stale, failed or has a growing backlog"
+        ),
+    )
+
+
 def _check_scheduled_job_recovery(
     database,
     now: datetime,
@@ -247,6 +275,9 @@ def _check_scheduled_job_recovery(
         status = database.get_scheduled_job_runtime_status(now=now)
         expired_claims = int(status.get("expired_claim_count") or 0)
         session_open = status.get("session_open") is True
+        latest_brain_failed = (
+            status.get("latest_brain_status") == "FAILED"
+        )
         age_key = (
             "latest_brain_age_seconds"
             if session_open
@@ -257,6 +288,7 @@ def _check_scheduled_job_recovery(
         maximum_age = 2100 if session_open else 7200
         ok = (
             expired_claims == 0
+            and (not session_open or not latest_brain_failed)
             and age_seconds is not None
             and 0 <= age_seconds <= maximum_age
         )

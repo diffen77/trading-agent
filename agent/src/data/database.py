@@ -317,10 +317,10 @@ class Database:
             version = session.execute(
                 text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
             ).scalar_one()
-            if version < 48:
+            if version < 52:
                 raise RuntimeError(
                     f"Database schema is too old (version {version}); "
-                    "version 48 is required"
+                    "version 52 is required"
                 )
 
     def upsert_instruments(
@@ -6416,6 +6416,30 @@ class Database:
         return policy
 
 
+    def get_active_exploration_policy(self):
+        """Return the hash-verified bounded paper-exploration policy."""
+        from ..core.exploration import (
+            ExplorationPolicy,
+            exploration_policy_hash,
+        )
+
+        with self.Session() as session:
+            row = session.execute(text("""
+                SELECT version, config, RTRIM(config_hash) AS config_hash
+                FROM exploration_policy_versions
+                WHERE status = 'ACTIVE'
+            """)).mappings().one_or_none()
+        if row is None:
+            raise RuntimeError("No active exploration policy exists")
+        policy = ExplorationPolicy.from_mapping(
+            version=row["version"],
+            config=row["config"],
+        )
+        if exploration_policy_hash(policy) != row["config_hash"]:
+            raise RuntimeError("Exploration policy config hash mismatch")
+        return policy
+
+
     def record_candidate_predictions(
         self,
         *,
@@ -6546,6 +6570,31 @@ class Database:
                 ticker,
                 ("ABSTAIN", None),
             )
+            exploration = candidate.get("exploration", False)
+            if not isinstance(exploration, bool):
+                raise ValueError("candidate exploration must be boolean")
+            exploration_policy_version = candidate.get(
+                "exploration_policy_version"
+            )
+            exploration_max_position_pct = candidate.get(
+                "exploration_max_position_pct"
+            )
+            if exploration:
+                exploration_policy_version = self._required_sync_text(
+                    exploration_policy_version,
+                    "candidate exploration_policy_version",
+                )
+                exploration_max_position_pct = self._finite_decimal(
+                    exploration_max_position_pct,
+                    "candidate exploration_max_position_pct",
+                )
+                if not 0 < exploration_max_position_pct <= 5:
+                    raise ValueError("candidate exploration position cap must be 0-5")
+            elif (
+                exploration_policy_version is not None
+                or exploration_max_position_pct is not None
+            ):
+                raise ValueError("non-exploration candidate has exploration metadata")
             normalized.append({
                 "ticker": ticker,
                 "policy_version": policy_version,
@@ -6560,6 +6609,9 @@ class Database:
                 "feature_json": feature_text,
                 "model_action": model_action,
                 "model_confidence": model_confidence,
+                "exploration": exploration,
+                "exploration_policy_version": exploration_policy_version,
+                "exploration_max_position_pct": exploration_max_position_pct,
             })
 
         ids = []
@@ -6633,7 +6685,10 @@ class Database:
                         feature_checksum_sha256,
                         model_action,
                         model_confidence,
-                        expected_horizons_minutes
+                        expected_horizons_minutes,
+                        exploration,
+                        exploration_policy_version,
+                        exploration_max_position_pct
                     )
                     SELECT
                         parent.id,
@@ -6662,7 +6717,10 @@ class Database:
                         ),
                         :model_action,
                         :model_confidence,
-                        evidence.expected_horizons
+                        evidence.expected_horizons,
+                        :exploration,
+                        :exploration_policy_version,
+                        :exploration_max_position_pct
                     FROM parent
                     JOIN evidence ON TRUE
                     ON CONFLICT (
@@ -6686,7 +6744,10 @@ class Database:
                             eligible,
                             reason_code,
                             model_action,
-                            model_confidence
+                            model_confidence,
+                            exploration,
+                            exploration_policy_version,
+                            exploration_max_position_pct
                         FROM candidate_predictions
                         WHERE ai_decision_id = :decision_id
                           AND policy_version = :policy_version
@@ -6715,6 +6776,9 @@ class Database:
                         values["reason_code"],
                         values["model_action"],
                         values["model_confidence"],
+                        values["exploration"],
+                        values["exploration_policy_version"],
+                        values["exploration_max_position_pct"],
                     )
                     actual = (
                         int(existing["source_book_state_id"]),
@@ -6729,6 +6793,13 @@ class Database:
                             if existing["model_confidence"] is not None
                             else None
                         ),
+                        bool(existing["exploration"]),
+                        existing["exploration_policy_version"],
+                        (
+                            Decimal(existing["exploration_max_position_pct"])
+                            if existing["exploration_max_position_pct"] is not None
+                            else None
+                        ),
                     )
                     if actual != expected:
                         raise ValueError(
@@ -6737,6 +6808,134 @@ class Database:
                     inserted_id = existing["id"]
                 ids.append(int(inserted_id))
         return ids
+
+    def record_decision_funnel_events(
+        self,
+        *,
+        ai_decision_id: int,
+        events: List[dict],
+        occurred_at: datetime,
+    ) -> int:
+        """Persist bounded idempotent stage and reason evidence."""
+        ai_decision_id = self._positive_integer(
+            ai_decision_id,
+            "ai_decision_id",
+        )
+        if not isinstance(events, list) or not 1 <= len(events) <= 100:
+            raise ValueError("events must contain between 1 and 100 rows")
+        if (
+            not isinstance(occurred_at, datetime)
+            or occurred_at.tzinfo is None
+            or occurred_at.utcoffset() is None
+        ):
+            raise ValueError("occurred_at must be timezone-aware")
+        allowed_stages = {
+            "MODEL_ACTION",
+            "VALIDATION_ACCEPTED",
+            "VALIDATION_REJECTED",
+            "VALIDATION_REVOKED",
+            "ORDER_ATTEMPT",
+            "ORDER_FILLED",
+            "ORDER_REJECTED",
+        }
+        normalized = []
+        for event in events:
+            if not isinstance(event, dict):
+                raise ValueError("funnel event must be an object")
+            stage = self._required_sync_text(
+                event.get("stage"),
+                "funnel stage",
+            )
+            if stage not in allowed_stages:
+                raise ValueError("funnel stage is unsupported")
+            ticker = event.get("ticker")
+            if ticker is not None:
+                ticker = self._required_sync_text(
+                    ticker,
+                    "funnel ticker",
+                ).upper()
+                if not re.fullmatch(r"[A-Z0-9][A-Z0-9.-]{0,19}", ticker):
+                    raise ValueError("funnel ticker is invalid")
+            action = event.get("action")
+            if action is not None:
+                action = self._required_sync_text(
+                    action,
+                    "funnel action",
+                ).upper()
+                if action not in {"BUY", "SELL", "HOLD"}:
+                    raise ValueError("funnel action is unsupported")
+            reason_code = self._required_sync_text(
+                event.get("reason_code"),
+                "funnel reason_code",
+            )
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", reason_code):
+                raise ValueError("funnel reason_code is invalid")
+            cycle_key = event.get("cycle_key")
+            if cycle_key is not None:
+                cycle_key = self._required_sync_text(
+                    cycle_key,
+                    "funnel cycle_key",
+                )
+                if not re.fullmatch(
+                    r"[a-z0-9][a-z0-9:._-]{2,159}",
+                    cycle_key,
+                ):
+                    raise ValueError("funnel cycle_key is invalid")
+            identity = json.dumps(
+                {
+                    "ai_decision_id": ai_decision_id,
+                    "stage": stage,
+                    "ticker": ticker,
+                    "action": action,
+                    "reason_code": reason_code,
+                    "cycle_key": cycle_key,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            normalized.append({
+                "event_key": hashlib.sha256(identity).hexdigest(),
+                "stage": stage,
+                "ticker": ticker,
+                "action": action,
+                "reason_code": reason_code,
+                "cycle_key": cycle_key,
+            })
+
+        inserted = 0
+        checked_at = occurred_at.astimezone(timezone.utc)
+        with self.Session.begin() as session:
+            for event in normalized:
+                event_id = session.execute(text("""
+                    INSERT INTO decision_funnel_events (
+                        event_key,
+                        ai_decision_id,
+                        cycle_key,
+                        stage,
+                        ticker,
+                        action,
+                        reason_code,
+                        occurred_at
+                    )
+                    VALUES (
+                        :event_key,
+                        :ai_decision_id,
+                        :cycle_key,
+                        :stage,
+                        :ticker,
+                        :action,
+                        :reason_code,
+                        :occurred_at
+                    )
+                    ON CONFLICT (event_key) DO NOTHING
+                    RETURNING id
+                """), {
+                    "ai_decision_id": ai_decision_id,
+                    "occurred_at": checked_at,
+                    **event,
+                }).scalar()
+                inserted += int(event_id is not None)
+        return inserted
 
     def record_candidate_prediction_outcomes(
         self,
@@ -7050,6 +7249,31 @@ class Database:
                 for row in action_rows
             ],
         }
+
+    def record_agent_evidence_report(
+        self,
+        *,
+        period: str,
+        generated_at: datetime,
+    ) -> int:
+        """Generate one idempotent daily or weekly evidence report."""
+        normalized_period = str(period).strip().upper()
+        if normalized_period not in {"DAILY", "WEEKLY"}:
+            raise ValueError("period must be DAILY or WEEKLY")
+        if (
+            not isinstance(generated_at, datetime)
+            or generated_at.tzinfo is None
+            or generated_at.utcoffset() is None
+        ):
+            raise ValueError("generated_at must be timezone-aware")
+        with self.Session.begin() as session:
+            report_id = session.execute(text("""
+                SELECT record_agent_evidence_report(:period, :generated_at)
+            """), {
+                "period": normalized_period,
+                "generated_at": generated_at.astimezone(timezone.utc),
+            }).scalar_one()
+        return int(report_id)
 
     def run_candidate_policy_calibration(
         self,
@@ -7467,6 +7691,7 @@ class Database:
         synced_at: datetime,
         status: str,
         synced_counts: Mapping[str, int],
+        backlog_counts: Mapping[str, int],
         total_nodes: int,
         total_relationships: int,
         error_code: str | None,
@@ -7502,6 +7727,25 @@ class Database:
             ):
                 raise ValueError("synced_counts contains an invalid value")
             normalized_counts[name] = value
+        if not isinstance(backlog_counts, Mapping):
+            raise ValueError("backlog_counts must be a mapping")
+        normalized_backlog = {}
+        expected_backlog_keys = {"decisions", "predictions", "outcomes"}
+        if (
+            status == "SUCCEEDED"
+            and set(backlog_counts) != expected_backlog_keys
+        ):
+            raise ValueError("successful graph sync requires complete backlog")
+        if status == "FAILED" and set(backlog_counts) - expected_backlog_keys:
+            raise ValueError("failed graph sync backlog contains unknown keys")
+        for name, value in backlog_counts.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+            ):
+                raise ValueError("backlog_counts contains an invalid value")
+            normalized_backlog[name] = value
         for label, value in (
             ("total_nodes", total_nodes),
             ("total_relationships", total_relationships),
@@ -7534,6 +7778,11 @@ class Database:
                 sort_keys=True,
                 separators=(",", ":"),
             ),
+            "backlog_counts": json.dumps(
+                normalized_backlog,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             "total_nodes": total_nodes,
             "total_relationships": total_relationships,
             "error_code": error_code,
@@ -7545,6 +7794,7 @@ class Database:
                     synced_at,
                     status,
                     synced_counts,
+                    backlog_counts,
                     total_nodes,
                     total_relationships,
                     error_code
@@ -7554,6 +7804,7 @@ class Database:
                     :synced_at,
                     :status,
                     CAST(:synced_counts AS JSONB),
+                    CAST(:backlog_counts AS JSONB),
                     :total_nodes,
                     :total_relationships,
                     :error_code
@@ -7584,21 +7835,53 @@ class Database:
         checked_at = now.astimezone(timezone.utc)
         with self.Session() as session:
             row = session.execute(text("""
+                WITH latest AS (
+                    SELECT *
+                    FROM knowledge_graph_sync_runs
+                    WHERE synced_at <= :now
+                    ORDER BY synced_at DESC, id DESC
+                    LIMIT 1
+                ),
+                previous_success AS (
+                    SELECT run.backlog_counts
+                    FROM knowledge_graph_sync_runs run, latest
+                    WHERE run.status = 'SUCCEEDED'
+                      AND (run.synced_at, run.id)
+                        < (latest.synced_at, latest.id)
+                    ORDER BY run.synced_at DESC, run.id DESC
+                    LIMIT 1
+                )
                 SELECT
-                    status,
-                    synced_at,
-                    synced_counts,
-                    total_nodes,
-                    total_relationships,
-                    error_code,
+                    latest.status,
+                    latest.synced_at,
+                    latest.synced_counts,
+                    latest.backlog_counts,
+                    latest.total_nodes,
+                    latest.total_relationships,
+                    latest.error_code,
                     GREATEST(
-                        EXTRACT(EPOCH FROM :now - synced_at),
+                        EXTRACT(EPOCH FROM :now - latest.synced_at),
                         0
-                    )::INTEGER AS age_seconds
-                FROM knowledge_graph_sync_runs
-                WHERE synced_at <= :now
-                ORDER BY synced_at DESC, id DESC
-                LIMIT 1
+                    )::INTEGER AS age_seconds,
+                    (
+                        COALESCE((latest.backlog_counts ->> 'decisions')::INTEGER, 0)
+                        + COALESCE((latest.backlog_counts ->> 'predictions')::INTEGER, 0)
+                        + COALESCE((latest.backlog_counts ->> 'outcomes')::INTEGER, 0)
+                    ) AS backlog_total,
+                    CASE
+                        WHEN previous_success.backlog_counts IS NULL THEN FALSE
+                        ELSE (
+                            COALESCE((latest.backlog_counts ->> 'decisions')::INTEGER, 0)
+                            + COALESCE((latest.backlog_counts ->> 'predictions')::INTEGER, 0)
+                            + COALESCE((latest.backlog_counts ->> 'outcomes')::INTEGER, 0)
+                        ) > (
+                            COALESCE((previous_success.backlog_counts ->> 'decisions')::INTEGER, 0)
+                            + COALESCE((previous_success.backlog_counts ->> 'predictions')::INTEGER, 0)
+                            + COALESCE((previous_success.backlog_counts ->> 'outcomes')::INTEGER, 0)
+                        )
+                    END AS backlog_growing
+                FROM latest
+                LEFT JOIN previous_success ON TRUE
             """), {"now": checked_at}).mappings().one_or_none()
         return dict(row) if row else None
 
@@ -10886,6 +11169,22 @@ class Database:
                     WHERE run.job_name = 'student_study'
                       AND run.status IN ('SUCCEEDED', 'SKIPPED_STALE')
                 ) AS latest_study_at,
+                (
+                    SELECT latest.status
+                    FROM scheduled_job_runs latest
+                    WHERE latest.job_name = 'brain_cycle'
+                      AND latest.scheduled_at <= :now
+                    ORDER BY latest.scheduled_at DESC, latest.job_key DESC
+                    LIMIT 1
+                ) AS latest_brain_status,
+                (
+                    SELECT latest.failure_code
+                    FROM scheduled_job_runs latest
+                    WHERE latest.job_name = 'brain_cycle'
+                      AND latest.scheduled_at <= :now
+                    ORDER BY latest.scheduled_at DESC, latest.job_key DESC
+                    LIMIT 1
+                ) AS latest_brain_failure_code,
                 COALESCE((
                     SELECT
                         session.status IN ('OPEN', 'HALF_DAY')
@@ -10915,6 +11214,8 @@ class Database:
             "expired_claim_count": int(row["expired_claim_count"]),
             "session_open": bool(row["session_open"]),
             "latest_brain_at": row["latest_brain_at"],
+            "latest_brain_status": row["latest_brain_status"],
+            "latest_brain_failure_code": row["latest_brain_failure_code"],
             "latest_brain_age_seconds": age_seconds(row["latest_brain_at"]),
             "latest_study_at": row["latest_study_at"],
             "latest_study_age_seconds": age_seconds(row["latest_study_at"]),

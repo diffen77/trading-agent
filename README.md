@@ -218,7 +218,7 @@ stängda affärer och kritiska incidenter räknas från append-only-loggar
 och drawdown använder sessionens högsta/lägsta NAV. Se
 [forward-paper-kontraktet](docs/forward-paper-benchmark.md).
 
-Schema 48 ger även vanlig papertrading en separat, versionsbunden
+Schema 52 ger även vanlig papertrading en separat, versionsbunden
 kostnadspolicy. Fills från förseglad orderbok använder faktisk spread,
 5 baspunkters konservativ slippage och 0,25 procents courtage med minst
 1 SEK. Policyn gäller endast framåt och ersätter aldrig ett aktivt
@@ -397,7 +397,7 @@ tills feature-flagga, ISIN-mappning, policy och filacceptans är
 validerade.
 
 Pipeline, manifest, icke-root-konfiguration och rollback är testade.
-Releasemanifestet kräver schema 48. Stagingens exakta deploystatus finns i
+Releasemanifestet kräver schema 52. Stagingens exakta deploystatus finns i
 [Aktuellt läge](docs/CURRENT_STATE.md).
 
 ## Strategiversioner och lärloop

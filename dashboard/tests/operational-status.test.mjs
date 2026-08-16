@@ -9,8 +9,9 @@ import {
 
 function readySnapshot() {
   return {
+    runtime_release_sha: 'a'.repeat(40),
     checked_at: '2026-07-29T10:00:00.000Z',
-    schema_version: 48,
+    schema_version: 52,
     strategy: {
       version: 'momentum-report-swing-v1',
       config_hash: 'a'.repeat(64),
@@ -107,6 +108,40 @@ function readySnapshot() {
     },
     operational_alerts: [],
     scheduled_routines: [],
+    activity: {
+      local_date: '2026-07-29',
+      decisions_today: 4,
+      trades_today: 1,
+      latest_decision_at: '2026-07-29T09:55:00.000Z',
+      latest_trade_at: '2026-07-29T09:56:00.000Z',
+    },
+    pipelines: {
+      learning_status: 'SUCCEEDED',
+      learning_evaluated_at: '2026-07-29T09:58:00.000Z',
+      learning_error_code: null,
+      knowledge_status: 'SUCCEEDED',
+      knowledge_synced_at: '2026-07-29T09:59:00.000Z',
+      knowledge_error_code: null,
+      knowledge_backlog_counts: {
+        decisions: 0,
+        predictions: 0,
+        outcomes: 0,
+      },
+    },
+    funnel: {
+      ai_decision_id: 73,
+      decided_at: '2026-07-29T09:55:00.000Z',
+      candidates_read: 416,
+      candidates_filtered: 400,
+      candidates_eligible: 16,
+      model_actions: 2,
+      validations_accepted: 1,
+      validations_rejected: 1,
+      order_attempts: 1,
+      order_rejections: 0,
+      fills: 1,
+      stopping_reasons: { CONFIDENCE_BELOW_MINIMUM: 1 },
+    },
   }
 }
 
@@ -125,6 +160,27 @@ test('ready evidence produces an explicit READY status', () => {
   assert.equal(status.risk.status, 'WITHIN_LIMITS')
   assert.deepEqual(status.monitoring.active_alerts, [])
   assert.deepEqual(status.monitoring.scheduled_routines, [])
+  assert.deepEqual(status.source, {
+    system_of_record: 'postgresql',
+    checked_at: '2026-07-29T10:00:00.000Z',
+    read_status: 'CURRENT',
+    max_age_seconds: 120,
+  })
+  assert.equal(status.activity.local_date, '2026-07-29')
+  assert.equal(status.activity.decisions_today, 4)
+  assert.equal(status.activity.trades_today, 1)
+  assert.equal(status.pipelines.knowledge.status, 'SUCCEEDED')
+  assert.deepEqual(status.pipelines.knowledge.backlog, {
+    decisions: 0,
+    predictions: 0,
+    outcomes: 0,
+  })
+  assert.equal(status.pipelines.learning.status, 'SUCCEEDED')
+  assert.equal(status.funnel.candidates_read, 416)
+  assert.equal(status.funnel.fills, 1)
+  assert.deepEqual(status.funnel.stopping_reasons, {
+    CONFIDENCE_BELOW_MINIMUM: 1,
+  })
 })
 
 
@@ -352,5 +408,9 @@ test('database loader derives status from one consistent snapshot', async () => 
   assert.match(queries[0], /trading_daily_risk/)
   assert.match(queries[0], /operational_alert_events/)
   assert.match(queries[0], /scheduled_routine_events/)
+  assert.match(queries[0], /ai_decisions/)
+  assert.match(queries[0], /knowledge_graph_sync_runs/)
+  assert.match(queries[0], /continuous_learning_runs/)
+  assert.match(queries[0], /decision_funnel_events/)
   assert.match(queries[0], /contract_ready AND validation_ready/)
 })

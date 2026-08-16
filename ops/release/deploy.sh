@@ -60,6 +60,9 @@ TRADING_AGENT_DASHBOARD_AUTH_USERNAME_SECRET=$(
 TRADING_AGENT_DASHBOARD_AUTH_PASSWORD_SECRET=$(
     runtime_secret_value DASHBOARD_AUTH_PASSWORD_FILE ""
 )
+TRADING_AGENT_OPERATIONS_READ_TOKEN_SECRET=$(
+    runtime_secret_value OPERATIONS_READ_TOKEN_FILE ""
+)
 TRADING_AGENT_ANTHROPIC_API_KEY_SECRET=$(
     runtime_secret_value ANTHROPIC_API_KEY_FILE ""
 )
@@ -89,6 +92,7 @@ export \
     TRADING_AGENT_DATABASE_URL_SECRET \
     TRADING_AGENT_DASHBOARD_AUTH_USERNAME_SECRET \
     TRADING_AGENT_DASHBOARD_AUTH_PASSWORD_SECRET \
+    TRADING_AGENT_OPERATIONS_READ_TOKEN_SECRET \
     TRADING_AGENT_ANTHROPIC_API_KEY_SECRET \
     TRADING_AGENT_HERMES_API_KEY_SECRET \
     TRADING_AGENT_OPENAI_COMPATIBLE_API_KEY_SECRET \
@@ -177,6 +181,17 @@ verify_image_provenance() {
             return 1
         fi
     done
+}
+
+verify_runtime_release_identity() {
+    release=$1
+    compose_release "$release" exec -T dashboard node -e '
+const expected = process.argv[1];
+const actual = process.env.RELEASE_SHA;
+if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(actual || "") || actual !== expected) {
+  process.exit(1);
+}
+' "$release"
 }
 
 smoke_release() {
@@ -306,7 +321,8 @@ activate_release() {
             --profile nasdaq-reference \
             stop universe-sync || return 1
     fi
-    smoke_release "$release"
+    smoke_release "$release" || return 1
+    verify_runtime_release_identity "$release" || return 1
 }
 
 read_pointer() {

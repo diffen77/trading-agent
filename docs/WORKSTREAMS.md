@@ -1,21 +1,24 @@
 # Arbetsströmmar
 
-Denna lista visar vad som är klart, vad som blockerar nästa steg och vad som
-medvetet väntar. Detaljerade framtidskrav ligger kvar i `ROADMAP.md`.
+Denna lista visar vad som är klart, vad som pågår och vad som medvetet väntar.
+Genomförandeordning och acceptanskriterier finns i
+[ROADMAP.md](../ROADMAP.md).
 
 | Prioritet | Arbetsström | Status | Nästa verifierbara resultat |
 | --- | --- | --- | --- |
-| P0 | Recovery och GitHub | Mergad till `main`, CI och release gröna | Bevara mergecommit och releasekörning i nästa deploymentbevis |
-| P0 | Öppningsrutin | Fixad och regressionstestad | Verifiera nästa öppna XSTO-session efter release |
-| P0 | Releaseproveniens | Implementerad | Första officiella image verifieras commit→digest i staging |
-| P0 | Schema 45-transition | Beslut krävs | Snapshot, underhållsfönster och explicit backout för första release |
-| P1 | Benchmark-preflight | Implementerad lokalt | Kör mot staging efter schema-45-release och lös rapporterade blockerare |
-| P1 | Historisk data | Leveransgate klar, data saknas | Välj licens/produkt, lägg sampleverans och bygg formatadapter |
-| P1 | Kontinuerligt lärande | Automatisk evidens, aktivering och återställning i paper trading | Fortsätt samla sessioner och följ policyövergångarnas evidens |
-| P1 | Dokumentation och projektminne | Synkat efter merge | Uppdatera efter nästa bestående driftbeslut |
-| P1 | Forward benchmark | Blockerad av data och beslut | Ren ledger, frysta antaganden och godkänd förregistrering |
-| P1 | Tradinggraf | Shadow-only | Oberoende evidens före eventuell operativ aktivering |
-| P2 | Broker och riktiga pengar | Avsiktligt blockerad | Separat beslut först efter godkänt forward-benchmark |
+| P0 | GitHub, release och staging | `edd6bd2` har grön CI, immutable release och lyckad deploy | Bevara commit→digest→runtime-bevis vid varje ändring |
+| P0 | Säker driftinsyn | Implementerad och lokalt verifierad | Provisionera operations-token och verifiera efter release |
+| P0 | Sann jobbhälsa | Stabil felkod, retry, ledgerbevis och larm är lokalt verifierade | Verifiera nästa modellfel i staging utan att framkalla fel |
+| P0 | Neo4j | Backloglarm och smal central statusbrygga är lokalt verifierade | Aktivera bryggan efter token och release |
+| P1 | Beslutstratt | Full tratt och stabila reason codes är lokalt verifierade | Följ första kompletta stagingdygnet |
+| P1 | Aktivt lärande | Exploration, segmentering, parent-jämförelse och rollback finns | Samla forward-utfall per segment |
+| P1 | Kapitalrotation | Opportunity cost och rotationskvalitet mäts | Utvärdera efter fler faktiska rotationer |
+| P1 | Kostnadsfri forward-data | Fördröjd Nasdaq-ström samlas | Bygg sammanhängande återspelbar sessionshistorik |
+| P1 | Löpande jämförelse | Kassa och toppsignal ingår som kostnadsfria baslinjer | Fortsätt separat slutligt OMXSGI-bevis |
+| P1 | Automatisk rapport | Daglig och veckovis evidensrapport körs i kvällsrutinen | Verifiera första stagingrapporterna |
+| P2 | Dashboard | Kontrollrummet är implementerat och lokalt byggverifierat | Visuell kontroll efter release med riktig data |
+| P2 | Dokumentation | Runtime-SHA exponeras, deploy verifierar SHA och Brain speglar den | Aktivera statusbrygga och larma på stale data |
+| P3 | Betald data, USA och broker | Avsiktligt senarelagt | Separata beslut först när paperbeviset motiverar dem |
 
 ## Arbetsregel
 

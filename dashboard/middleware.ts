@@ -4,6 +4,10 @@ import {
   readBasicAuthConfig,
   verifyBasicAuthorization,
 } from './lib/server/basic-auth.mjs'
+import {
+  readServiceAuthConfig,
+  verifyServiceAuthorization,
+} from './lib/server/service-auth.mjs'
 
 const challenge = 'Basic realm="Trading Agent", charset="UTF-8"'
 
@@ -46,17 +50,26 @@ function authenticationRequired(request: NextRequest) {
 
 export async function middleware(request: NextRequest) {
   let config
+  let serviceConfig
   try {
     config = readBasicAuthConfig({
       DASHBOARD_AUTH_USERNAME: process.env.DASHBOARD_AUTH_USERNAME,
       DASHBOARD_AUTH_PASSWORD: process.env.DASHBOARD_AUTH_PASSWORD,
     })
+    serviceConfig = readServiceAuthConfig({
+      OPERATIONS_READ_TOKEN: process.env.OPERATIONS_READ_TOKEN,
+    })
   } catch {
     return authenticationUnavailable(request)
   }
 
-  const authorized = await verifyBasicAuthorization(
-    request.headers.get('authorization'),
+  const authorization = request.headers.get('authorization')
+  const serviceAuthorized = (
+    request.nextUrl.pathname === '/api/operations'
+    && await verifyServiceAuthorization(authorization, serviceConfig)
+  )
+  const authorized = serviceAuthorized || await verifyBasicAuthorization(
+    authorization,
     config,
   )
   if (!authorized) {

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from src.healthcheck import (
     HealthMode,
     _probe_model,
+    collect_knowledge_graph_health_check,
     collect_health_report,
     main,
 )
@@ -43,11 +44,16 @@ class _Database:
         lot_mismatch_count=0,
         learning_status="SUCCEEDED",
         learning_age_seconds=60,
+        graph_status="SUCCEEDED",
+        graph_age_seconds=60,
+        graph_backlog_total=0,
+        graph_backlog_growing=False,
         scheduler_expired_claims=0,
         scheduler_age_seconds=60,
         scheduler_session_open=False,
         scheduler_brain_age_seconds=None,
         scheduler_study_age_seconds=None,
+        scheduler_brain_status="SUCCEEDED",
     ):
         self.balance_count = balance_count
         self.calendar_count = calendar_count
@@ -63,6 +69,10 @@ class _Database:
         self.lot_mismatch_count = lot_mismatch_count
         self.learning_status = learning_status
         self.learning_age_seconds = learning_age_seconds
+        self.graph_status = graph_status
+        self.graph_age_seconds = graph_age_seconds
+        self.graph_backlog_total = graph_backlog_total
+        self.graph_backlog_growing = graph_backlog_growing
         self.scheduler_expired_claims = scheduler_expired_claims
         self.scheduler_session_open = scheduler_session_open
         self.scheduler_brain_age_seconds = (
@@ -75,6 +85,7 @@ class _Database:
             if scheduler_study_age_seconds is None
             else scheduler_study_age_seconds
         )
+        self.scheduler_brain_status = scheduler_brain_status
         self.operational_requests = []
         self.mode_requests = []
         self.index_requests = []
@@ -102,6 +113,15 @@ class _Database:
             }
         }
 
+    def get_knowledge_graph_runtime_status(self, *, now):
+        assert now == NOW
+        return {
+            "status": self.graph_status,
+            "age_seconds": self.graph_age_seconds,
+            "backlog_total": self.graph_backlog_total,
+            "backlog_growing": self.graph_backlog_growing,
+        }
+
 
     def get_scheduled_job_runtime_status(self, *, now):
         assert now == NOW
@@ -109,6 +129,12 @@ class _Database:
             "expired_claim_count": self.scheduler_expired_claims,
             "session_open": self.scheduler_session_open,
             "latest_brain_age_seconds": self.scheduler_brain_age_seconds,
+            "latest_brain_status": self.scheduler_brain_status,
+            "latest_brain_failure_code": (
+                "LLM_RESPONSE_INVALID"
+                if self.scheduler_brain_status == "FAILED"
+                else None
+            ),
             "latest_study_age_seconds": self.scheduler_study_age_seconds,
         }
 
@@ -195,6 +221,23 @@ def test_readiness_fails_when_continuous_learning_worker_is_stale():
     assert not _by_code(report)["continuous_learning_worker"].ok
 
 
+def test_readiness_fails_when_knowledge_graph_is_stale_or_backlog_grows():
+    stale = collect_knowledge_graph_health_check(
+        _Database(graph_age_seconds=901),
+        NOW,
+    )
+    growing = collect_knowledge_graph_health_check(
+        _Database(
+            graph_backlog_total=12,
+            graph_backlog_growing=True,
+        ),
+        NOW,
+    )
+
+    assert not stale.ok
+    assert not growing.ok
+
+
 def test_readiness_fails_when_scheduler_has_an_expired_restart_lease():
     database = _Database(scheduler_expired_claims=1)
 
@@ -242,6 +285,23 @@ def test_readiness_requires_a_brain_slot_within_35_minutes_when_xsto_is_open():
     checks = _by_code(report)
     assert report.status == "NOT_READY"
     assert not checks["scheduled_job_recovery"].ok
+
+
+def test_readiness_fails_immediately_when_latest_open_session_brain_job_failed():
+    database = _Database(
+        scheduler_session_open=True,
+        scheduler_brain_age_seconds=60,
+        scheduler_brain_status="FAILED",
+    )
+
+    report = collect_health_report(
+        mode=HealthMode.READINESS,
+        database_factory=lambda: database,
+        now=NOW,
+        environ={},
+    )
+
+    assert not _by_code(report)["scheduled_job_recovery"].ok
 
 
 def test_readiness_fails_closed_when_ledger_invariant_is_broken():

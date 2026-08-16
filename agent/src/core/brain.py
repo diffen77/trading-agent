@@ -22,6 +22,7 @@ from .risk import (
     validate_decision,
     validate_decision_response,
 )
+from .exploration import apply_exploration_policy
 from .strategy import (
     ActiveStrategy,
     DEFAULT_TRADING_OBJECTIVE,
@@ -44,6 +45,22 @@ from ..data.market_data import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class BrainCycleError(RuntimeError):
+    """Terminal model failure with a stable scheduler-facing code."""
+
+    _ALLOWED_CODES = {
+        "LLM_REQUEST_FAILED",
+        "LLM_RESPONSE_EMPTY",
+        "LLM_RESPONSE_INVALID",
+    }
+
+    def __init__(self, failure_code: str):
+        if failure_code not in self._ALLOWED_CODES:
+            raise ValueError("unsupported brain cycle failure code")
+        self.failure_code = failure_code
+        super().__init__(failure_code)
 
 
 def trade_idempotency_key(
@@ -94,6 +111,9 @@ class TradingBrain:
 
     # Ollama model (free, local) - 14B for speed, 32B too slow with large context
     OLLAMA_MODEL = "qwen2.5-coder:14b"
+    MODEL_DECISION_MAX_ATTEMPTS = 2
+    MODEL_DECISION_RETRY_SECONDS = 2
+
     @staticmethod
     def _now_utc() -> datetime:
         return datetime.now(timezone.utc)
@@ -511,10 +531,23 @@ class TradingBrain:
             None,
         )
         policy = policy_reader() if callable(policy_reader) else None
-        return rank_candidate_signals(
+        candidates = rank_candidate_signals(
             rows,
             limit=1_000,
             policy=policy,
+        )
+        exploration_reader = getattr(
+            self.db,
+            "get_active_exploration_policy",
+            None,
+        )
+        if not callable(exploration_reader):
+            return candidates
+        exploration_policy = exploration_reader()
+        return apply_exploration_policy(
+            candidates,
+            policy=exploration_policy,
+            active_min_signal_score=policy.min_signal_score,
         )
 
     @staticmethod
@@ -526,6 +559,7 @@ class TradingBrain:
             candidate
             for candidate in candidates
             if candidate.get("eligible") is True
+            or candidate.get("exploration") is True
         ][:20]
 
     def _get_learning_context(self, *, now: datetime) -> str:
@@ -730,80 +764,148 @@ class TradingBrain:
             f"({'deep' if deep else 'standard'} analysis)..."
         )
 
-        try:
-            raw_text, prompt_tokens, response_tokens = self._call_llm(
-                system=render_system_prompt(active_strategy),
-                user_msg=user_msg,
-                max_tokens=2000,
-            )
+        decisions = None
+        raw_text = ""
+        prompt_tokens = 0
+        response_tokens = 0
+        terminal_code = "LLM_REQUEST_FAILED"
+        terminal_error: Exception | None = None
 
-            logger.info(
-                f"🧠 LLM response: {prompt_tokens} in / "
-                f"{response_tokens} out tokens"
-            )
-
-            json_str = raw_text.strip()
-            if json_str.startswith("```"):
-                lines = json_str.split("\n")
-                json_str = "\n".join(
-                    line
-                    for line in lines
-                    if not line.strip().startswith("```")
+        for attempt in range(1, self.MODEL_DECISION_MAX_ATTEMPTS + 1):
+            try:
+                raw_text, prompt_tokens, response_tokens = self._call_llm(
+                    system=render_system_prompt(active_strategy),
+                    user_msg=user_msg,
+                    max_tokens=2000,
                 )
+            except Exception as exc:
+                terminal_code = "LLM_REQUEST_FAILED"
+                terminal_error = exc
+                logger.warning(
+                    "llm_decision_attempt_failed attempt=%d max_attempts=%d "
+                    "failure_code=%s",
+                    attempt,
+                    self.MODEL_DECISION_MAX_ATTEMPTS,
+                    terminal_code,
+                )
+            else:
+                logger.info(
+                    "🧠 LLM response: %d in / %d out tokens",
+                    prompt_tokens,
+                    response_tokens,
+                )
+                response_was_empty = (
+                    not isinstance(raw_text, str) or not raw_text.strip()
+                )
+                try:
+                    if response_was_empty:
+                        raise ValueError("model response was empty")
+                    json_str = raw_text.strip()
+                    if json_str.startswith("```"):
+                        lines = json_str.split("\n")
+                        json_str = "\n".join(
+                            line
+                            for line in lines
+                            if not line.strip().startswith("```")
+                        )
+                    decisions = validate_decision_response(
+                        json.loads(json_str)
+                    )
+                    terminal_error = None
+                    break
+                except (
+                    json.JSONDecodeError,
+                    DecisionValidationError,
+                    ValueError,
+                ) as exc:
+                    terminal_code = (
+                        "LLM_RESPONSE_EMPTY"
+                        if response_was_empty
+                        else "LLM_RESPONSE_INVALID"
+                    )
+                    terminal_error = exc
+                    decision_id = self._log_decision(
+                        prompt_tokens=prompt_tokens,
+                        response_tokens=response_tokens,
+                        decisions_json={"error_code": terminal_code},
+                        market_context=context,
+                        raw_response=raw_text if isinstance(raw_text, str) else "",
+                        strategy=active_strategy,
+                        timestamp=now,
+                    )
+                    self._record_candidate_snapshot(
+                        decision_id=decision_id,
+                        candidates=candidate_universe,
+                        model_decisions=[],
+                    )
+                    logger.warning(
+                        "llm_decision_attempt_failed attempt=%d "
+                        "max_attempts=%d failure_code=%s",
+                        attempt,
+                        self.MODEL_DECISION_MAX_ATTEMPTS,
+                        terminal_code,
+                    )
 
-            decisions = validate_decision_response(json.loads(json_str))
-            decision_id = self._log_decision(
-                prompt_tokens=prompt_tokens,
-                response_tokens=response_tokens,
-                decisions_json=decisions,
-                market_context=context,
-                raw_response=raw_text,
-                strategy=active_strategy,
-                timestamp=now,
-            )
-            self._record_candidate_snapshot(
-                decision_id=decision_id,
-                candidates=candidate_universe,
-                model_decisions=decisions.get("decisions", []),
-            )
-            decisions["_audit_id"] = decision_id
-            return decisions
+            if attempt < self.MODEL_DECISION_MAX_ATTEMPTS:
+                sleep(self.MODEL_DECISION_RETRY_SECONDS)
 
-        except (json.JSONDecodeError, DecisionValidationError) as e:
-            logger.error(f"Failed to parse model response as JSON: {e}")
-            logger.error(f"Raw response: {raw_text[:500]}")
-            decision_id = self._log_decision(
-                prompt_tokens=prompt_tokens,
-                response_tokens=response_tokens,
-                decisions_json={"error": str(e), "raw": raw_text[:1000]},
-                market_context=context,
-                raw_response=raw_text,
-                strategy=active_strategy,
-                timestamp=now,
-            )
-            self._record_candidate_snapshot(
-                decision_id=decision_id,
-                candidates=candidate_universe,
-                model_decisions=[],
-            )
-            return {
-                "decisions": [],
-                "market_outlook": "neutral",
-                "analysis_summary": f"Parse error: {e}",
-                "_audit_id": decision_id,
+        if decisions is None:
+            raise BrainCycleError(terminal_code) from terminal_error
+
+        decision_id = self._log_decision(
+            prompt_tokens=prompt_tokens,
+            response_tokens=response_tokens,
+            decisions_json=decisions,
+            market_context=context,
+            raw_response=raw_text,
+            strategy=active_strategy,
+            timestamp=now,
+        )
+        self._record_candidate_snapshot(
+            decision_id=decision_id,
+            candidates=candidate_universe,
+            model_decisions=decisions.get("decisions", []),
+        )
+        decisions["_exploration_tickers"] = {
+            candidate["ticker"]: {
+                "policy_version": candidate["exploration_policy_version"],
+                "max_position_pct": candidate["exploration_max_position_pct"],
             }
-
-        except Exception as e:
-            logger.error(f"Model API error: {e}", exc_info=True)
-            return {
-                "decisions": [],
-                "market_outlook": "neutral",
-                "analysis_summary": f"API error: {e}",
-            }
+            for candidate in candidate_universe
+            if candidate.get("exploration") is True
+        }
+        decisions["_audit_id"] = decision_id
+        return decisions
 
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
+
+    def _persist_funnel_events(
+        self,
+        *,
+        decision_id: int | None,
+        events: list[dict[str, Any]],
+        occurred_at: datetime,
+    ) -> None:
+        recorder = getattr(
+            self.db,
+            "record_decision_funnel_events",
+            None,
+        )
+        if not callable(recorder) or not events:
+            return
+        if (
+            isinstance(decision_id, bool)
+            or not isinstance(decision_id, int)
+            or decision_id <= 0
+        ):
+            raise ValueError("decision_id is required for funnel evidence")
+        recorder(
+            ai_decision_id=decision_id,
+            events=events,
+            occurred_at=occurred_at,
+        )
 
     def validate_decisions(
         self,
@@ -822,14 +924,47 @@ class TradingBrain:
             logger.error("Decision response must be a JSON object")
             return validated
 
+        decision_id = decisions.get("_audit_id")
+        exploration_tickers = decisions.get("_exploration_tickers") or {}
+        if not isinstance(exploration_tickers, dict):
+            exploration_tickers = {}
+        validation_started_at = self._now_utc()
+        funnel_events: list[dict[str, Any]] = []
+
+        def funnel(
+            stage: str,
+            reason_code: str,
+            *,
+            ticker: str | None = None,
+            action: str | None = None,
+        ) -> None:
+            funnel_events.append({
+                "stage": stage,
+                "ticker": ticker,
+                "action": action,
+                "reason_code": reason_code,
+            })
+
+        def finish() -> List[Dict]:
+            self._persist_funnel_events(
+                decision_id=decision_id,
+                events=funnel_events,
+                occurred_at=validation_started_at,
+            )
+            return validated
+
         raw = decisions.get("decisions", [])
 
         if not raw:
             logger.info("🧠 No decisions from Claude.")
-            return validated
+            return finish()
         if not isinstance(raw, list):
             logger.error("Decision response field 'decisions' must be a list")
-            return validated
+            funnel(
+                "VALIDATION_REJECTED",
+                "MODEL_DECISIONS_NOT_LIST",
+            )
+            return finish()
 
         # Get current state
         try:
@@ -842,18 +977,21 @@ class TradingBrain:
             )
         except Exception as e:
             logger.error(f"Cannot validate - DB error: {e}")
-            return validated
+            funnel("VALIDATION_REJECTED", "VALIDATION_STATE_UNAVAILABLE")
+            return finish()
 
         if not math.isfinite(float(cash)) or cash < 0:
             logger.error("Cannot validate - invalid cash balance")
-            return validated
+            funnel("VALIDATION_REJECTED", "INVALID_CASH_BALANCE")
+            return finish()
         if (
             total_value is None
             or not math.isfinite(float(total_value))
             or total_value <= 0
         ):
             logger.error("Cannot validate - invalid total portfolio value")
-            return validated
+            funnel("VALIDATION_REJECTED", "INVALID_PORTFOLIO_VALUE")
+            return finish()
 
         companies = {
             str(row['ticker']).upper(): row.get('sector')
@@ -882,7 +1020,7 @@ class TradingBrain:
         projected_cash = float(cash)
         sold_tickers = set()
         rotation_sell_accepted = False
-        now = self._now_utc()
+        now = validation_started_at
         try:
             operational_status = self.db.require_operational_market_data(now)
             market_session = self._get_market_session(now)
@@ -891,7 +1029,8 @@ class TradingBrain:
                 f"Cannot validate - operational market data is not ready: "
                 f"{exc}"
             )
-            return validated
+            funnel("VALIDATION_REJECTED", "MARKET_DATA_NOT_READY")
+            return finish()
         public_pretrade = (
             operational_status.get("data_type")
             == "delayed-pre-trade-equity"
@@ -926,20 +1065,63 @@ class TradingBrain:
                 )
             except DecisionValidationError as exc:
                 logger.info(f"Decision rejected: {exc}")
+                funnel(
+                    "VALIDATION_REJECTED",
+                    "MODEL_DECISION_INVALID",
+                )
                 continue
 
             action = d["action"]
             ticker = d["ticker"]
             confidence = d["confidence"]
             size_pct = d.get("position_size_pct")
+            exploration = exploration_tickers.get(ticker)
+            if action == "BUY" and isinstance(exploration, dict):
+                exploration_cap = float(exploration.get("max_position_pct") or 0)
+                if not 0 < exploration_cap <= 5:
+                    logger.error("Invalid exploration cap for %s", ticker)
+                    funnel(
+                        "VALIDATION_REJECTED",
+                        "EXPLORATION_POLICY_INVALID",
+                        ticker=ticker,
+                        action=action,
+                    )
+                    continue
+                size_pct = min(float(size_pct), exploration_cap)
+                d["position_size_pct"] = size_pct
+                d["exploration"] = True
+                d["exploration_policy_version"] = exploration.get(
+                    "policy_version"
+                )
+            funnel(
+                "MODEL_ACTION",
+                f"MODEL_{action}",
+                ticker=ticker,
+                action=action,
+            )
+
+            def reject(reason_code: str) -> None:
+                funnel(
+                    "VALIDATION_REJECTED",
+                    reason_code,
+                    ticker=ticker,
+                    action=action,
+                )
 
             if action == "HOLD":
+                funnel(
+                    "VALIDATION_ACCEPTED",
+                    "VALID_HOLD",
+                    ticker=ticker,
+                    action=action,
+                )
                 continue
 
             if market_session is None or not market_session.is_open(now):
                 logger.info(
                     f"🚫 {ticker} rejected: XSTO is closed or calendar is missing"
                 )
+                reject("XSTO_SESSION_CLOSED")
                 continue
 
             try:
@@ -950,11 +1132,13 @@ class TradingBrain:
                 )
             except MarketDataError as exc:
                 logger.info(f"🚫 {ticker} rejected: {exc}")
+                reject("EXECUTION_QUOTE_INVALID")
                 continue
             if quote is None:
                 logger.info(
                     f"🚫 {ticker} rejected: fresh intraday quote is missing"
                 )
+                reject("EXECUTION_QUOTE_MISSING")
                 continue
 
             d['execution_price'] = float(quote.last_price)
@@ -968,6 +1152,7 @@ class TradingBrain:
                         f"🚫 {ticker} rejected: executable book quantity "
                         "is missing"
                     )
+                    reject("EXECUTABLE_QUANTITY_MISSING")
                     continue
                 d['executable_quantity'] = float(quote.volume)
 
@@ -976,6 +1161,7 @@ class TradingBrain:
                     f"🚫 {ticker} rejected: confidence {confidence}% <= "
                     f"{config.min_confidence:g}%"
                 )
+                reject("CONFIDENCE_BELOW_MINIMUM")
                 continue
 
             if action == "BUY":
@@ -1004,12 +1190,14 @@ class TradingBrain:
                             f"🚫 {ticker} rejected: current authorized "
                             f"OMXSGI signal is unavailable: {exc}"
                         )
+                        reject("INDEX_SIGNAL_UNAVAILABLE")
                         continue
 
                 if ticker in sold_tickers:
                     logger.info(
                         f"🚫 {ticker} rejected: same-cycle SELL/BUY round trip"
                     )
+                    reject("SAME_CYCLE_ROUND_TRIP")
                     continue
 
                 if num_positions >= config.max_positions:
@@ -1017,6 +1205,7 @@ class TradingBrain:
                         f"🚫 {ticker} rejected: max "
                         f"{config.max_positions} positions reached"
                     )
+                    reject("POSITION_LIMIT_REACHED")
                     continue
 
                 if market_index_change < config.omxs30_risk_off_pct:
@@ -1024,11 +1213,13 @@ class TradingBrain:
                         f"🚫 {ticker} rejected: OMXSGI "
                         f"{market_index_change:.1f}% (risk-off)"
                     )
+                    reject("MARKET_RISK_OFF")
                     continue
 
                 # Rule: don't buy what we already own
                 if ticker in current_tickers:
                     logger.info(f"🚫 {ticker} rejected: already in portfolio")
+                    reject("ALREADY_IN_PORTFOLIO")
                     continue
 
                 position_value = total_value * size_pct / 100
@@ -1038,6 +1229,7 @@ class TradingBrain:
                     position_value = projected_cash * 0.9
                     if position_value < 500:
                         logger.info(f"🚫 {ticker} rejected: insufficient cash")
+                        reject("INSUFFICIENT_CASH")
                         continue
 
                 if config.require_price_above_sma20:
@@ -1056,6 +1248,7 @@ class TradingBrain:
                                 f"🚫 {ticker} rejected: continuous 20-minute "
                                 "pre-trade warm-up is incomplete"
                             )
+                            reject("SIGNAL_WARMUP_INCOMPLETE")
                             continue
                         signal_date = tech.get("session_date")
                         rsi = None
@@ -1075,6 +1268,7 @@ class TradingBrain:
                         logger.info(
                             f"🚫 {ticker} rejected: SMA20 or price data is missing"
                         )
+                        reject("SMA20_MISSING")
                         continue
 
                     if isinstance(signal_date, str):
@@ -1087,6 +1281,7 @@ class TradingBrain:
                             f"🚫 {ticker} rejected: SMA20 signal is not "
                             "from the current XSTO session"
                         )
+                        reject("SIGNAL_NOT_CURRENT_SESSION")
                         continue
 
                     if rsi is not None:
@@ -1103,17 +1298,25 @@ class TradingBrain:
                         logger.info(
                             f"🚫 {ticker} rejected: non-finite price or SMA20"
                         )
+                        reject("NON_FINITE_SIGNAL")
                         continue
                     if price <= sma20:
                         logger.info(
                             f"🚫 {ticker} rejected: price {price:.2f} "
                             f"<= SMA20 {sma20:.2f}"
                         )
+                        reject("PRICE_NOT_ABOVE_SMA20")
                         continue
 
                 d['position_value'] = position_value
                 d['strategy_version'] = active_strategy.version
                 validated.append(d)
+                funnel(
+                    "VALIDATION_ACCEPTED",
+                    "BUY_VALIDATED",
+                    ticker=ticker,
+                    action=action,
+                )
                 num_positions += 1
                 current_tickers.add(ticker)
                 projected_cash -= position_value
@@ -1121,6 +1324,7 @@ class TradingBrain:
             elif action == "SELL":
                 if ticker not in current_tickers:
                     logger.info(f"🚫 {ticker} SELL rejected: not in portfolio")
+                    reject("POSITION_NOT_HELD")
                     continue
 
                 # Rule: minimum holding period - don't sell same day as buy
@@ -1150,6 +1354,7 @@ class TradingBrain:
                             f"{hours_held:.1f}h (min "
                             f"{config.min_holding_hours:g}h)"
                         )
+                        reject("MINIMUM_HOLDING_PERIOD")
                         continue
 
                 # Rule: only sell on bearish outlook or stop-loss, not just neutral
@@ -1163,6 +1368,7 @@ class TradingBrain:
                         f"confidence={confidence}% (need bearish or conf≥"
                         f"{config.sell_confidence:g}%)"
                     )
+                    reject("SELL_CONVICTION_TOO_LOW")
                     continue
 
                 shares = current_shares[ticker]
@@ -1178,16 +1384,24 @@ class TradingBrain:
                         f"🚫 {ticker} SELL rejected: rotation requires a "
                         "complete exit before replacement"
                     )
+                    reject("ROTATION_REQUIRES_FULL_EXIT")
                     continue
                 if rotation_requested and rotation_sell_accepted:
                     logger.info(
                         f"🚫 {ticker} SELL rejected: at most one rotation "
                         "is allowed per cycle"
                     )
+                    reject("ROTATION_LIMIT_REACHED")
                     continue
 
                 d['strategy_version'] = active_strategy.version
                 validated.append(d)
+                funnel(
+                    "VALIDATION_ACCEPTED",
+                    "SELL_VALIDATED",
+                    ticker=ticker,
+                    action=action,
+                )
                 projected_cash += shares_to_sell * d['execution_price']
                 if full_exit:
                     num_positions -= 1
@@ -1202,6 +1416,17 @@ class TradingBrain:
             validated = [
                 item for item in validated if item["action"] != "SELL"
             ]
+            for item in raw:
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("action", "")).upper() == "SELL"
+                ):
+                    funnel(
+                        "VALIDATION_REVOKED",
+                        "ROTATION_REPLACEMENT_REJECTED",
+                        ticker=str(item.get("ticker", "")).upper() or None,
+                        action="SELL",
+                    )
             logger.info(
                 "Rotation cancelled: no replacement BUY passed validation"
             )
@@ -1218,7 +1443,7 @@ class TradingBrain:
             )
 
         logger.info(f"🧠 Validated {len(validated)}/{len(raw)} decisions")
-        return validated
+        return finish()
 
     # ------------------------------------------------------------------
     # Execution
@@ -1246,6 +1471,7 @@ class TradingBrain:
                 "decision_id is required for AI trade execution"
             )
         executed = []
+        funnel_events: list[dict[str, Any]] = []
         rotation_sell_executed = False
 
         for d in decisions:
@@ -1260,12 +1486,26 @@ class TradingBrain:
                     f"🚫 {ticker} BUY skipped: paired rotation SELL did "
                     "not execute"
                 )
+                funnel_events.append({
+                    "stage": "ORDER_REJECTED",
+                    "ticker": ticker,
+                    "action": action,
+                    "reason_code": "ROTATION_SELL_NOT_FILLED",
+                    "cycle_key": cycle_key,
+                })
                 continue
             idempotency_key = trade_idempotency_key(
                 cycle_key=cycle_key,
                 action=action,
                 ticker=ticker,
             )
+            funnel_events.append({
+                "stage": "ORDER_ATTEMPT",
+                "ticker": ticker,
+                "action": action,
+                "reason_code": "PAPER_ORDER_ATTEMPTED",
+                "cycle_key": cycle_key,
+            })
 
             try:
                 if action == "BUY":
@@ -1294,18 +1534,47 @@ class TradingBrain:
                     }
                     if trader.execute_trade(opp):
                         executed.append(d)
+                        funnel_events.append({
+                            "stage": "ORDER_FILLED",
+                            "ticker": ticker,
+                            "action": action,
+                            "reason_code": "PAPER_TRADE_FILLED",
+                            "cycle_key": cycle_key,
+                        })
                         logger.info(f"✅ BUY {ticker} executed ({d.get('confidence')}%)")
                         self.notifier.notify_trade(opp)
+                    else:
+                        funnel_events.append({
+                            "stage": "ORDER_REJECTED",
+                            "ticker": ticker,
+                            "action": action,
+                            "reason_code": "TRADER_REJECTED_ORDER",
+                            "cycle_key": cycle_key,
+                        })
 
                 elif action == "SELL":
                     # Get current position
                     portfolio = self.db.get_portfolio()
                     pos = portfolio[portfolio['ticker'] == ticker]
                     if pos.empty:
+                        funnel_events.append({
+                            "stage": "ORDER_REJECTED",
+                            "ticker": ticker,
+                            "action": action,
+                            "reason_code": "POSITION_MISSING_AT_EXECUTION",
+                            "cycle_key": cycle_key,
+                        })
                         continue
                     shares = float(pos.iloc[0]['shares'])
                     price = d.get('execution_price')
                     if price is None:
+                        funnel_events.append({
+                            "stage": "ORDER_REJECTED",
+                            "ticker": ticker,
+                            "action": action,
+                            "reason_code": "EXECUTION_PRICE_MISSING",
+                            "cycle_key": cycle_key,
+                        })
                         continue
                     price = float(price)
                     if d.get('source_book_state_id') is not None:
@@ -1318,6 +1587,13 @@ class TradingBrain:
                                 f"🚫 {ticker} SELL rejected: executable "
                                 "book quantity is invalid"
                             )
+                            funnel_events.append({
+                                "stage": "ORDER_REJECTED",
+                                "ticker": ticker,
+                                "action": action,
+                                "reason_code": "EXECUTABLE_QUANTITY_INVALID",
+                                "cycle_key": cycle_key,
+                            })
                             continue
                         if (
                             not executable_quantity.is_finite()
@@ -1327,6 +1603,13 @@ class TradingBrain:
                                 f"🚫 {ticker} SELL rejected: executable "
                                 "book quantity is invalid"
                             )
+                            funnel_events.append({
+                                "stage": "ORDER_REJECTED",
+                                "ticker": ticker,
+                                "action": action,
+                                "reason_code": "EXECUTABLE_QUANTITY_INVALID",
+                                "cycle_key": cycle_key,
+                            })
                             continue
                         executable_quantity = executable_quantity.quantize(
                             Decimal('0.0001'),
@@ -1337,6 +1620,13 @@ class TradingBrain:
                                 f"🚫 {ticker} SELL rejected: executable "
                                 "book quantity is below trade precision"
                             )
+                            funnel_events.append({
+                                "stage": "ORDER_REJECTED",
+                                "ticker": ticker,
+                                "action": action,
+                                "reason_code": "QUANTITY_BELOW_PRECISION",
+                                "cycle_key": cycle_key,
+                            })
                             continue
                         original_shares = shares
                         shares = float(min(
@@ -1383,12 +1673,26 @@ class TradingBrain:
                         if d.get("_rotation_pair") is True:
                             rotation_sell_executed = True
                         executed.append(d)
+                        funnel_events.append({
+                            "stage": "ORDER_FILLED",
+                            "ticker": ticker,
+                            "action": action,
+                            "reason_code": "PAPER_TRADE_FILLED",
+                            "cycle_key": cycle_key,
+                        })
                         logger.info(
                             f"✅ SELL {ticker} executed "
                             f"({d.get('confidence')}%)"
                         )
                         self.notifier.notify_trade(trade)
                     else:
+                        funnel_events.append({
+                            "stage": "ORDER_REJECTED",
+                            "ticker": ticker,
+                            "action": action,
+                            "reason_code": "DUPLICATE_ORDER",
+                            "cycle_key": cycle_key,
+                        })
                         logger.info(
                             f"Duplicate SELL {ticker} ignored "
                             f"(trade {result.trade_id})"
@@ -1396,7 +1700,19 @@ class TradingBrain:
 
             except Exception as e:
                 logger.error(f"Error executing {action} {ticker}: {e}", exc_info=True)
+                funnel_events.append({
+                    "stage": "ORDER_REJECTED",
+                    "ticker": ticker,
+                    "action": action,
+                    "reason_code": "ORDER_EXECUTION_ERROR",
+                    "cycle_key": cycle_key,
+                })
 
+        self._persist_funnel_events(
+            decision_id=decision_id,
+            events=funnel_events,
+            occurred_at=self._now_utc(),
+        )
         return executed
 
     # ------------------------------------------------------------------
