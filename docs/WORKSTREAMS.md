@@ -6,18 +6,18 @@ Genomförandeordning och acceptanskriterier finns i
 
 | Prioritet | Arbetsström | Status | Nästa verifierbara resultat |
 | --- | --- | --- | --- |
-| P0 | GitHub, release och staging | `edd6bd2` har grön CI, immutable release och lyckad deploy | Bevara commit→digest→runtime-bevis vid varje ändring |
-| P0 | Säker driftinsyn | Implementerad och lokalt verifierad | Provisionera operations-token och verifiera efter release |
-| P0 | Sann jobbhälsa | Stabil felkod, retry, ledgerbevis och larm är lokalt verifierade | Verifiera nästa modellfel i staging utan att framkalla fel |
-| P0 | Neo4j | Backloglarm och smal central statusbrygga är lokalt verifierade | Aktivera bryggan efter token och release |
-| P1 | Beslutstratt | Full tratt och stabila reason codes är lokalt verifierade | Följ första kompletta stagingdygnet |
+| P0 | GitHub, release och staging | P0–P2 har grön CI, immutable release, deploy och autentiserad live-smoke | Bevara commit→digest→runtime-bevis vid varje ändring |
+| P0 | Säker driftinsyn | Operations-token finns i Bitwarden och live-smoken verifierar release, schema och PostgreSQL-källa | Använd samma smala väg för löpande statusläsning |
+| P0 | Sann jobbhälsa | Stabil felkod, retry, ledgerbevis och larm är deployade | Verifiera nästa naturliga modellfel utan att framkalla fel |
+| P0 | Neo4j | Backloglarm är deployat och den smala centrala statusbryggan är testad | Aktivera bryggans schemalagda körning |
+| P1 | Beslutstratt | Full tratt och stabila reason codes är deployade | Följ första kompletta stagingdygnet |
 | P1 | Aktivt lärande | Exploration, segmentering, parent-jämförelse och rollback finns | Samla forward-utfall per segment |
 | P1 | Kapitalrotation | Opportunity cost och rotationskvalitet mäts | Utvärdera efter fler faktiska rotationer |
 | P1 | Kostnadsfri forward-data | Fördröjd Nasdaq-ström samlas | Bygg sammanhängande återspelbar sessionshistorik |
 | P1 | Löpande jämförelse | Kassa och toppsignal ingår som kostnadsfria baslinjer | Fortsätt separat slutligt OMXSGI-bevis |
 | P1 | Automatisk rapport | Daglig och veckovis evidensrapport körs i kvällsrutinen | Verifiera första stagingrapporterna |
-| P2 | Dashboard | Kontrollrummet är implementerat och lokalt byggverifierat | Visuell kontroll efter release med riktig data |
-| P2 | Dokumentation | Runtime-SHA exponeras, deploy verifierar SHA och Brain speglar den | Aktivera statusbrygga och larma på stale data |
+| P2 | Dashboard | Kontrollrummet är deployat; build och live operationskedja är verifierade | Gör visuell kontroll när en ansluten browser finns |
+| P2 | Dokumentation | Runtime-SHA exponeras och live-smoken kräver exakt SHA | Aktivera statusbrygga och larma på stale data |
 | P3 | Betald data, USA och broker | Avsiktligt senarelagt | Separata beslut först när paperbeviset motiverar dem |
 
 ## Arbetsregel

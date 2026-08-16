@@ -9,9 +9,10 @@ historiska journalen och ska inte användas som ensam källa för dagens drift.
 
 - Systemet är en fail-closed papertradingplattform. Riktiga pengar och
   brokerkoppling är blockerade.
-- Kanonisk kod och GitHub `main` är
-  `edd6bd2d90abd2829cea5537de16732f26d89924`.
-- Samma revision har grön CI, immutable release och lyckad stagingdeploy.
+- Kanonisk kod är GitHub `main`. Aktiv fullständig runtime-SHA visas av den
+  autentiserade operations-API:n och måste motsvara senaste lyckade deploy.
+- Varje aktiv runtime-revision måste ha grön CI, immutable release, lyckad
+  stagingdeploy och autentiserad live-smoke.
 - Agentens mål är 20 000 → 26 000 SEK, motsvarande 30 procents
   nettoavkastning på 6–12 månader. Målet och aktuell målprogress ingår i varje
   modellbeslut; det är ett styrmål, inte en garanti eller en affärskvot.
@@ -20,10 +21,10 @@ historiska journalen och ska inte användas som ensam källa för dagens drift.
 - Central Neo4j Brain på Neptun är nåbar och färsk. Tradinggrafen på Sjöboden
   är avsiktligt en separat, PostgreSQL-härledd graf.
 
-## Lokalt verifierat, ännu inte release
+## P0–P2 deployat och verifierat
 
-Roadmap P0–P2 är implementerad lokalt ovanpå den verifierade stagingreleasen;
-P3 är avsiktligt orörd. Den lokala leveransen kräver schema 52 och innehåller:
+Roadmap P0–P2 är deployad på den verifierade papertradingmiljön;
+P3 är avsiktligt orörd. Releasen kräver schema 52 och innehåller:
 
 - autentiserad read-only driftstatus med färskhetsbevis, releaseidentitet,
   dagens aktivitet, beslutstratt och härledd grafstatus;
@@ -39,9 +40,12 @@ P3 är avsiktligt orörd. Den lokala leveransen kräver schema 52 och innehålle
 
 Verifieringen består av 714 godkända agenttester, 72 godkända dashboardtester
 mot ett nybyggt PostgreSQL-schema 52, lyckat dashboardbygge, exekverad
-dagsrapport och fyra godkända statusbryggetester. Detta är inte deploybevis.
-GitHub `main` och staging är fortsatt den ovan angivna revisionen tills en
-separat commit, push och release har genomförts.
+dagsrapport och fyra godkända statusbryggetester. GitHub CI `31965952223`,
+immutable release `31966056152` och plattformsdeploy `31966233936` passerade.
+Den hemlighetssäkra live-smoken `31966528157` krävde PostgreSQL `CURRENT`,
+exakt release-SHA med status `VERIFIED`, schema 52 och HTTP 200 från den
+autentiserade operations-API:n. Operations-token skapades direkt i Bitwarden
+av Kajenkörning `31965889647` utan att värdet skrevs till Git eller logg.
 
 ## Verifierad kod och release
 
@@ -56,7 +60,10 @@ Följande dag-ett-förbättringar ingår nu i `main`:
 - `8805c15`: stagingdeploy ägs av `diffen77/plattform-deploy`, använder
   self-hosted runner på Kajen och kräver ett CI-utlöst digestbevis;
 - `edd6bd2`: avkastningsmålet, aktuell equity, återstående målgap och
-  kontrollerad `SELL → BUY`-rotation ingår i den faktiska beslutsloopen.
+  kontrollerad `SELL → BUY`-rotation ingår i den faktiska beslutsloopen;
+- `2e4a3cb`: sann brain-felstatus, beslutstratt, styrd exploration,
+  segmenterad evidens, automatiska rapporter, grafbacklog, autentiserad
+  operationsstatus och kontrollrum i schema 52.
 
 På ett nybyggt PostgreSQL 16-schema 48 passerade 692 agenttester, 67
 dashboardtester och 27 fokuserade releasetester. Dashboardens
@@ -66,11 +73,12 @@ immutabla releasekörningen `31538592727` byggde och pushade revisionsmärkta
 agent- och dashboard-images, attesterade deras proveniens och publicerade
 plattformens digestbevis.
 
-För nuvarande main-head passerade CI-körning `31638367795` och immutable
-release `31638530991`. Plattformsdeploy `31638793647` migrerade, startade om
+För den första P0–P2-releasen passerade CI-körning `31965952223` och immutable
+release `31966056152`. Plattformsdeploy `31966233936` migrerade, startade om
 och verifierade staging utan rollback. Publik health svarade fortsatt exakt
-`{"status":"ok"}` med HTTP 200 den 2026-08-16. Health bevisar tjänstens
-tillgänglighet, men inte dagens affärer eller aktuell ledgerstatus.
+`{"status":"ok"}` med HTTP 200 den 2026-08-16. Den separata autentiserade
+live-smoken `31966528157` verifierade dessutom aktuell ledgerkälla,
+releaseidentitet och schema utan att exponera token eller rå ledger.
 
 ## Verifierad staging
 
@@ -83,20 +91,18 @@ Senaste läsverifieringen visade:
 - publik health: `200`;
 - operations-API utan auth: `401`;
 - elva långlivade Compose-tjänster: `running` och `healthy`;
-- intern readiness: `READY`;
-- databasschema: 48;
-- agent-image:
-  `sha256:ddeabf52fa24824c3da0d74ee6cd7f6cfc3283b7fad0fb7f7abfb1707e58e087`;
-- dashboard-image:
-  `sha256:d3574375864d7c9255e27e10cc6f57c35d44b6756520b332ed448de867d91436`;
-- båda images har OCI-revision
-  `edd6bd2d90abd2829cea5537de16732f26d89924`.
+- autentiserad operationskälla: `CURRENT`;
+- databasschema: 52;
+- samtliga utbytta imagefamiljer verifierades mot de digestlåsta images som
+  hämtades av plattformen;
+- aktiv runtime-release har status `VERIFIED` och fullständig SHA måste
+  motsvara den senaste lyckade plattformsdeployens begärda SHA.
 
-Plattformsdeploy `31638793647` validerade nyttolasten, sparade föregående
+Plattformsdeploy `31966233936` validerade nyttolasten, sparade föregående
 imagefamiljer för rollback, hämtade digestlåsta images, migrerade, startade om
-och verifierade extern health. Efterkontrollen visade inga öppna driftlarm.
-Trading-readiness var korrekt `NOT_READY` enbart därför att XSTO-sessionen var
-stängd; monitorn kräver inte marknadsdata utanför en öppen session.
+och verifierade extern health. Operations-smoken verifierade databasläsning,
+release och schema separat; dess `overall_status` får fortsatt vara blockerad
+av saknad handels- eller benchmarkevidens utan att deploymenten är trasig.
 
 Den senaste autentiserade ledgerverifieringen den 2026-08-11 visade följande;
 värdena ska inte behandlas som dagens ledgerstatus. Den aktiva XSTO-mappningen
