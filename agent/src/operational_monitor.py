@@ -15,6 +15,13 @@ from .core.schedule import (
     stockholm_now,
 )
 from .data.database import Database
+
+# Recovery windows after which trading routine alerts stop blocking
+# (even though the routine cannot be re-executed)
+_TRADING_ROUTINE_ALERT_RECOVERY = {
+    "open": timedelta(hours=2),
+    "midday": timedelta(hours=2),
+}
 from .healthcheck import (
     HealthMode,
     HealthReport,
@@ -78,6 +85,36 @@ _CHECK_ALERTS = {
 }
 
 
+def _blocking_missed_routines(
+    *,
+    observed_at: datetime,
+    missed: list,
+) -> list[str]:
+    """Return routine keys that should block operations.
+    
+    Trading routines (open/midday) that have been missed for longer than
+    their alert recovery window should stop blocking operations, even though
+    they remain in the missed list for evidence.
+    
+    Non-trading routines block until they are no longer missed.
+    """
+    local_now = stockholm_now(observed_at)
+    blocking = []
+    
+    for routine in missed:
+        recovery_window = _TRADING_ROUTINE_ALERT_RECOVERY.get(routine.name)
+        if recovery_window is None:
+            # Not a trading routine, blocks until resolved
+            blocking.append(routine.key)
+        else:
+            # Trading routine: only block within recovery window
+            delay = local_now - routine.scheduled_at
+            if delay <= recovery_window:
+                blocking.append(routine.key)
+    
+    return blocking
+
+
 def evaluate_operational_alerts(
     *,
     readiness: HealthReport,
@@ -86,8 +123,16 @@ def evaluate_operational_alerts(
     critical_incident_count: int,
     market_data_expected: bool = True,
     knowledge_graph_ready: bool | None = None,
+    blocking_missed_routines: Iterable[str] | None = None,
 ) -> tuple[OperationalAlert, ...]:
-    """Map bounded health evidence to stable, actionable alert identities."""
+    """Map bounded health evidence to stable, actionable alert identities.
+    
+    Args:
+        blocking_missed_routines: Optional subset of missed_routine_keys that should
+            block operations (PAGE severity). If None, all missed routines block.
+            This allows creating evidence of missed routines without blocking after
+            their recovery window has passed.
+    """
     if (
         isinstance(critical_incident_count, bool)
         or not isinstance(critical_incident_count, int)
@@ -117,17 +162,25 @@ def evaluate_operational_alerts(
             )
             seen_codes.add(code)
 
+    # Determine which missed routines should block
+    if blocking_missed_routines is None:
+        blocking_keys = set(missed_routine_keys)
+    else:
+        blocking_keys = set(blocking_missed_routines)
+
     for routine_key in missed_routine_keys:
         if not isinstance(routine_key, str) or not routine_key:
             raise ValueError("missed routine keys must be non-empty strings")
-        alerts.append(
-            OperationalAlert(
-                f"scheduled:{routine_key}",
-                "SCHEDULED_ROUTINE_MISSED",
-                "PAGE",
-                f"Scheduled routine {routine_key} did not complete",
+        # Only create PAGE alerts for routines that should block
+        if routine_key in blocking_keys:
+            alerts.append(
+                OperationalAlert(
+                    f"scheduled:{routine_key}",
+                    "SCHEDULED_ROUTINE_MISSED",
+                    "PAGE",
+                    f"Scheduled routine {routine_key} did not complete",
+                )
             )
-        )
 
     if critical_incident_count:
         alerts.append(
@@ -212,6 +265,10 @@ def run_monitor_once(
         and session.is_open(observed_at)
         and observed_at >= session.opens_at + timedelta(minutes=25)
     )
+    blocking_missed = _blocking_missed_routines(
+        observed_at=observed_at,
+        missed=missed,
+    )
     alerts = evaluate_operational_alerts(
         readiness=readiness,
         trading_readiness=trading_readiness,
@@ -222,6 +279,7 @@ def run_monitor_once(
             database,
             observed_at,
         ).ok,
+        blocking_missed_routines=blocking_missed,
     )
     transitions = database.sync_operational_alerts(
         alerts,
