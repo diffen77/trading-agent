@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   test-agent:
-    runs-on: ubuntu-latest
+    runs-on: worker1-ci-trading-agent
     services:
       postgres:
         image: postgres:16-alpine
@@ -75,7 +75,7 @@ jobs:
         run: python -m pytest tests/ -v
 
   test-dashboard:
-    runs-on: ubuntu-latest
+    runs-on: worker1-ci-trading-agent
     services:
       postgres:
         image: postgres:16-alpine
